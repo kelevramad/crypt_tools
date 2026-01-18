@@ -12,16 +12,16 @@ import random
 import sys
 import time
 import zlib
+import getpass
 from enum import StrEnum
 from typing import Optional
 
 # Third-party imports
 try:
-    import animation
+    from tqdm import tqdm
     from Crypto.Cipher import AES
 except ImportError:
-
-    print("Error: Missing dependencies. Please install 'pycryptodome' and 'animation'.")
+    print("Error: Missing dependencies. Please install 'pycryptodome' and 'tqdm'.")
     sys.exit(1)
 
 # =========================
@@ -220,17 +220,20 @@ class CryptoEngine:
                 
                 compressor = zlib.compressobj(level=9) if compress else None
                 
-                while True:
-                    chunk = fin.read(Config.CHUNK_SIZE)
-                    if not chunk:
-                        break
-                    
-                    if compressor:
-                        compressed_chunk = compressor.compress(chunk)
-                        if compressed_chunk:
-                            fout.write(cipher.encrypt(compressed_chunk))
-                    else:
-                        fout.write(cipher.encrypt(chunk))
+                with tqdm(total=file_size, unit='B', unit_scale=True, desc="Encrypting", leave=False) as pbar:
+                    while True:
+                        chunk = fin.read(Config.CHUNK_SIZE)
+                        if not chunk:
+                            break
+                        
+                        if compressor:
+                            compressed_chunk = compressor.compress(chunk)
+                            if compressed_chunk:
+                                fout.write(cipher.encrypt(compressed_chunk))
+                        else:
+                            fout.write(cipher.encrypt(chunk))
+                        
+                        pbar.update(len(chunk))
                 
                 if compressor:
                     remaining = compressor.flush()
@@ -272,7 +275,7 @@ class CryptoEngine:
                 
                 ciphertext_len = file_size - header_size - footer_size
                 
-                with open(output_path, 'wb') as fout:
+                with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc="Decrypting", leave=False) as pbar:
                     decompressor = zlib.decompressobj() if compress else None
                     bytes_read = 0
                     
@@ -291,6 +294,7 @@ class CryptoEngine:
                             fout.write(decrypted_chunk)
                             
                         bytes_read += len(chunk)
+                        pbar.update(len(chunk))
 
                     if decompressor:
                         fout.write(decompressor.flush())
@@ -319,7 +323,7 @@ class CryptoEngine:
 # CLI Logic
 # =========================
 
-def parse_args():
+def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=Config.DESCRIPTION)
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-e', '--encrypt', action='store_true', help='Encrypt mode (default)')
@@ -330,20 +334,37 @@ def parse_args():
     group.add_argument('-i', '--input', help='Input file path')
     
     parser.add_argument('-o', '--output', help='Output file path')
-    parser.add_argument('-p', '--password', required=True, help='Password')
+    parser.add_argument('-p', '--password', required=False, help='Password (optional, will prompt if missing)')
     parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
+    parser.add_argument('-r', '--recursive', action='store_true', help='Recursively process directories')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-v', '--version', action='version', version=Config.VERSION)
     
-    return parser.parse_args()
+    return parser.parse_args(argv)
 
-def main():
+def main(argv=None):
     Banner.show()
-    args = parse_args()
+    # If argv is None, argparse uses sys.argv[1:] automatically.
+    # If argv is passed (from tests), it uses that list.
+    args = parse_args(argv)
     engine = CryptoEngine()
     
     if args.debug:
         Logger.log('info', "Debug Mode Enabled")
+
+    # Secure Password Input
+    if not args.password:
+        args.password = getpass.getpass("Enter Password: ")
+        if not args.password:
+             Logger.log('error', "Password cannot be empty.")
+             sys.exit(1)
+        
+        # Verify password if encrypting
+        if not args.decrypt:
+            verify_pass = getpass.getpass("Verify Password: ")
+            if args.password != verify_pass:
+                Logger.log('error', "Passwords do not match!")
+                sys.exit(1)
 
     if args.text:
         # Default to encrypt if decrypt is not explicitly set
@@ -363,19 +384,61 @@ def main():
                 Logger.log('error', f"Failed: {e}")
 
     elif args.input:
-        if not os.path.exists(args.input):
-            Logger.log('error', f"File not found: {args.input}")
-            sys.exit(1)
-            
-        default_ext = '.enc' if not args.decrypt else '.dec'
-        output_file = args.output or (os.path.splitext(args.input)[0] + default_ext)
         
-        if not args.decrypt:
-            success = engine.encrypt_file(args.input, output_file, args.password, args.compress)
-        else:
-            success = engine.decrypt_file(args.input, output_file, args.password, args.compress)
+        # Recursive Directory Processing
+        if args.recursive and os.path.isdir(args.input):
+            input_dir = args.input
+            Logger.log('info', f"Processing directory: {input_dir}")
             
-        if not success:
+            success_count = 0
+            fail_count = 0
+            
+            for root, dirs, files in os.walk(input_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    
+                    if not args.decrypt:
+                        # Skip already encrypted files if in crypt mode
+                        if file.endswith('.enc'): continue
+                        
+                        out_path = file_path + '.enc'
+                        if engine.encrypt_file(file_path, out_path, args.password, args.compress):
+                            success_count += 1
+                        else:
+                            fail_count += 1
+                    else:
+                        # Decrypt mode: Only process .enc files (or whatever convention, here simplistic)
+                        if not file.endswith('.enc'): continue
+                        
+                        out_path = os.path.splitext(file_path)[0] # Strip .enc
+                         # If extension was removed and no extension remains, might be an issue, but standard restore.
+                        if os.path.splitext(file_path)[0] == file_path:
+                             out_path = file_path + '.dec'
+
+                        if engine.decrypt_file(file_path, out_path, args.password, args.compress):
+                            success_count += 1
+                        else:
+                             fail_count += 1
+            
+            Logger.log('info', f"Batch complete. Success: {success_count}, Failed: {fail_count}")
+
+        elif os.path.exists(args.input):
+            if os.path.isdir(args.input):
+                 Logger.log('error', f"Input is a directory. Use -r/--recursive to process directories.")
+                 sys.exit(1)
+
+            default_ext = '.enc' if not args.decrypt else '.dec'
+            output_file = args.output or (os.path.splitext(args.input)[0] + default_ext)
+            
+            if not args.decrypt:
+                success = engine.encrypt_file(args.input, output_file, args.password, args.compress)
+            else:
+                success = engine.decrypt_file(args.input, output_file, args.password, args.compress)
+                
+            if not success:
+                sys.exit(1)
+        else:
+            Logger.log('error', f"File not found: {args.input}")
             sys.exit(1)
 
 if __name__ == '__main__':

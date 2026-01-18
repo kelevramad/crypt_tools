@@ -19,7 +19,8 @@
 - Python 3.13+
 - Dependencies (managed via `uv` or `pip`):
   - `pycryptodome`
-  - `animation`
+  - `pycryptodome`
+  - `tqdm` (Progress Bar)
   - `zlib` (Standard Library)
 
 ### Setup
@@ -47,7 +48,10 @@ uv run crypt_tools.py --decrypt -t "encrypted_base64_string" -p "your_password"
 ### Encrypt a File
 Encrypt a file (e.g., `document.txt`) to an encrypted output (default `.enc`).
 ```bash
-# Basic encryption
+# Basic encryption (Password Prompt + Verification)
+uv run crypt_tools.py --encrypt -i document.txt
+
+# Non-interactive (password provided)
 uv run crypt_tools.py --encrypt -i document.txt -p "your_password"
 
 # With compression
@@ -60,8 +64,14 @@ Decrypt an encrypted file (e.g., `document.enc`) back to its original form.
 # Basic decryption
 uv run crypt_tools.py --decrypt -i document.enc -p "your_password"
 
-# With decompression (if encrypted with -c)
+# With decompression
 uv run crypt_tools.py --decrypt -i document.enc -p "your_password" -c
+
+### Encrypt a Directory (Recursive)
+Encrypt all files in a folder recursively.
+```bash
+uv run crypt_tools.py --encrypt -i ./my_folder -r
+```
 ```
 
 ## Technical Details
