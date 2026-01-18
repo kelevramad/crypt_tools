@@ -8,19 +8,19 @@ import argparse
 import base64
 import hashlib
 import os
-import random
 import sys
 import time
 import zlib
+import shutil
 from enum import StrEnum
-from typing import Optional
+from typing import Optional, Union, BinaryIO, Generator
 
 # Third-party imports
 try:
     import animation
+    from Crypto import Random
     from Crypto.Cipher import AES
 except ImportError:
-
     print("Error: Missing dependencies. Please install 'pycryptodome' and 'animation'.")
     sys.exit(1)
 
@@ -72,64 +72,9 @@ class Logger:
         print(f"{color}{icon} {message}{TerminalColors.RESET}")
 
 class Banner:
-    """
-    Provides ASCII art banners for program display.
-    Randomly selects one banner from available options.
-    """
-    __BANNER = [
-        r"""
-      /$$$$$$                                  /$$           /$$$$$$$$                  /$$
-     /$$__  $$                                | $$          |__  $$__/                 | $$
-    | $$  \__/  /$$$$$$  /$$   /$$  /$$$$$$  /$$$$$$           | $$  /$$$$$$   /$$$$$$ | $$  /$$$$$$$
-    | $$       /$$__  $$| $$  | $$ /$$__  $$|_  $$_/           | $$ /$$__  $$ /$$__  $$| $$ /$$_____/
-    | $$      | $$  \__/| $$  | $$| $$  \ $$  | $$             | $$| $$  \ $$| $$  \ $$| $$|  $$$$$$
-    | $$    $$| $$      | $$  | $$| $$  | $$  | $$ /$$         | $$| $$  | $$| $$  | $$| $$ \____  $$
-    |  $$$$$$/| $$      |  $$$$$$$| $$$$$$$/  |  $$$$/         | $$|  $$$$$$/|  $$$$$$/| $$ /$$$$$$$/
-     \______/ |__/       \____  $$| $$____/    \___/           |__/ \______/  \______/ |__/|_______/
-                         /$$  | $$| $$
-                        |  $$$$$$/| $$
-                         \______/ |__/
-    """,
-        r"""
-      ÛÛÛÛÛÛÛÛÛ                                  ÛÛÛÛÛ       ÛÛÛÛÛÛÛÛÛÛÛ                   ÛÛÛÛ
-      ÛÛÛ°°°°°ÛÛÛ                                °°ÛÛÛ       °Û°°°ÛÛÛ°°°Û                  °°ÛÛÛ
-     ÛÛÛ     °°°  ÛÛÛÛÛÛÛÛ  ÛÛÛÛÛ ÛÛÛÛ ÛÛÛÛÛÛÛÛ  ÛÛÛÛÛÛÛ     °   °ÛÛÛ  °   ÛÛÛÛÛÛ   ÛÛÛÛÛÛ  °ÛÛÛ   ÛÛÛÛÛ
-    °ÛÛÛ         °°ÛÛÛ°°ÛÛÛ°°ÛÛÛ °ÛÛÛ °°ÛÛÛ°°ÛÛÛ°°°ÛÛÛ°          °ÛÛÛ     ÛÛÛ°°ÛÛÛ ÛÛÛ°°ÛÛÛ °ÛÛÛ  ÛÛÛ°°
-    °ÛÛÛ          °ÛÛÛ °°°  °ÛÛÛ °ÛÛÛ  °ÛÛÛ °ÛÛÛ  °ÛÛÛ           °ÛÛÛ    °ÛÛÛ °ÛÛÛ°ÛÛÛ °ÛÛÛ °ÛÛÛ °°ÛÛÛÛÛ
-    °°ÛÛÛ     ÛÛÛ °ÛÛÛ      °ÛÛÛ °ÛÛÛ  °ÛÛÛ °ÛÛÛ  °ÛÛÛ ÛÛÛ       °ÛÛÛ    °ÛÛÛ °ÛÛÛ°ÛÛÛ °ÛÛÛ °ÛÛÛ  °°°°ÛÛÛ
-     °°ÛÛÛÛÛÛÛÛÛ  ÛÛÛÛÛ     °°ÛÛÛÛÛÛÛ  °ÛÛÛÛÛÛÛ   °°ÛÛÛÛÛ        ÛÛÛÛÛ   °°ÛÛÛÛÛÛ °°ÛÛÛÛÛÛ  ÛÛÛÛÛ ÛÛÛÛÛÛ
-      °°°°°°°°°  °°°°°       °°°°°ÛÛÛ  °ÛÛÛ°°°     °°°°°        °°°°°     °°°°°°   °°°°°°  °°°°° °°°°°°
-                             ÛÛÛ °ÛÛÛ  °ÛÛÛ
-                            °°ÛÛÛÛÛÛ   ÛÛÛÛÛ
-                             °°°°°°   °°°°°
-    """,
-        r"""
-      ,ad8888ba,                                               888888888888                    88
-     d8"'    `"8b                                     ,d            88                         88
-    d8'                                               88            88                         88
-    88            8b,dPPYba, 8b       d8 8b,dPPYba, MM88MMM         88  ,adPPYba,   ,adPPYba,  88 ,adPPYba,
-    88            88P'   "Y8 `8b     d8' 88P'    "8a  88            88 a8"     "8a a8"     "8a 88 I8[    ""
-    Y8,           88          `8b,  d8'  88       d8  88            88 8b       d8 8b       d8 88  `"Y8ba,
-     Y8a.    .a8P 88           `8b,d8'   88b,   ,a8"  88,           88 "8a,   ,a8" "8a,   ,a8" 88 aa    ]8I
-      `"Y8888Y"'  88             Y88'    88`YbbdP"'   "Y888         88  `"YbbdP"'   `"YbbdP"'  88 `"YbbdP"'
-                                 d8'     88
-                                d8'      88
-    """,
-        r"""
-     ██████╗██████╗ ██╗   ██╗██████╗ ████████╗    ████████╗ ██████╗  ██████╗ ██╗     ███████╗
-    ██╔════╝██╔══██╗╚██╗ ██╔╝██╔══██╗╚══██╔══╝    ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝
-    ██║     ██████╔╝ ╚████╔╝ ██████╔╝   ██║          ██║   ██║   ██║██║   ██║██║     ███████╗
-    ██║     ██╔══██╗  ╚██╔╝  ██╔═══╝    ██║          ██║   ██║   ██║██║   ██║██║     ╚════██║
-    ╚██████╗██║  ██║   ██║   ██║        ██║          ██║   ╚██████╔╝╚██████╔╝███████╗███████║
-     ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝        ╚═╝          ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
-    """
-    ]
-
-    @classmethod
-    def show(cls):
-        """Displays a random banner."""
-        banner = cls.__BANNER[random.randint(0, len(cls.__BANNER) - 1)]
-        print(f"{TerminalColors.Foreground.CYAN}{banner}{TerminalColors.RESET}")
+    @staticmethod
+    def show():
+        """Displays a simple banner."""
         print(f"{TerminalColors.Foreground.CYAN}{Config.DESCRIPTION} v{Config.VERSION}{TerminalColors.RESET}")
         print(f"{TerminalColors.Foreground.CYAN}Author: {Config.AUTHOR}{TerminalColors.RESET}\n")
 
@@ -167,13 +112,16 @@ class CryptoEngine:
         Format: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
         """
         salt = os.urandom(Config.SALT_SIZE)
-        nonce = os.urandom(Config.NONCE_SIZE)
         key = self._derive_key(password, salt)
         
-        cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+        cipher = AES.new(key, AES.MODE_GCM) # GCM generates a random nonce by default if not provided? 
+                                            # No, typically best to generate explicitly or let library do it and read access.
+                                            # PyCryptodome AES.new(key, AES.MODE_GCM) creates a random nonce if not supplied. 
+        
         ciphertext, tag = cipher.encrypt_and_digest(data)
         
-        return salt + nonce + tag + ciphertext
+        # We need the nonce to decrypt.
+        return salt + cipher.nonce + tag + ciphertext
 
     def decrypt_data(self, enc_data: bytes, password: str) -> Optional[bytes]:
         """
@@ -181,14 +129,13 @@ class CryptoEngine:
         Expects: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
         """
         try:
-            overhead = Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
-            if len(enc_data) < overhead:
+            if len(enc_data) < Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE:
                 raise ValueError("Data too short")
 
             salt = enc_data[:Config.SALT_SIZE]
             nonce = enc_data[Config.SALT_SIZE : Config.SALT_SIZE + Config.NONCE_SIZE]
-            tag = enc_data[Config.SALT_SIZE + Config.NONCE_SIZE : overhead]
-            ciphertext = enc_data[overhead:]
+            tag = enc_data[Config.SALT_SIZE + Config.NONCE_SIZE : Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE]
+            ciphertext = enc_data[Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE :]
 
             key = self._derive_key(password, salt)
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -196,28 +143,36 @@ class CryptoEngine:
             return cipher.decrypt_and_verify(ciphertext, tag)
             
         except (ValueError, KeyError) as e:
+            # GCM verify failed or other error
             Logger.log('error', f"Decryption failed: {str(e)}")
             return None
 
     def encrypt_file(self, input_path: str, output_path: str, password: str, compress: bool = False) -> bool:
         """
         Encrypts a file using streaming (low memory usage).
-        Format: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
+        Format: [SALT(16)] + [NONCE(12)] + [TAG(16)... placeholders?]
+        
+        Wait, GCM tag is generated AFTER processing all data.
+        Streaming GCM is tricky because Tag is at the end.
+        But we can put Tag at the END of the file easily.
+        Structure: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
         """
         try:
             file_size = os.path.getsize(input_path)
             Logger.log('info', f"Processing {input_path} ({self._format_size(file_size)})")
             
             salt = os.urandom(Config.SALT_SIZE)
-            nonce = os.urandom(Config.NONCE_SIZE)
             key = self._derive_key(password, salt)
-            cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            cipher = AES.new(key, AES.MODE_GCM)
+            nonce = cipher.nonce
 
             with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
                 # Write Header: SALT + NONCE
                 fout.write(salt)
                 fout.write(nonce)
                 
+                # If compression is on, we can't easily stream perfectly without chunking protocol or temp file.
+                # Standard zlib stream object could work (zlib.compressobj).
                 compressor = zlib.compressobj(level=9) if compress else None
                 
                 while True:
@@ -226,12 +181,16 @@ class CryptoEngine:
                         break
                     
                     if compressor:
+                        # Feed chunk to compressor
                         compressed_chunk = compressor.compress(chunk)
                         if compressed_chunk:
+                            # Encrypt compressed data
+                            # Note: encrypt() in GCM mode updates the internal state for tag.
                             fout.write(cipher.encrypt(compressed_chunk))
                     else:
                         fout.write(cipher.encrypt(chunk))
                 
+                # Flush remaining data
                 if compressor:
                     remaining = compressor.flush()
                     if remaining:
@@ -253,7 +212,7 @@ class CryptoEngine:
     def decrypt_file(self, input_path: str, output_path: str, password: str, compress: bool = False) -> bool:
         """
         Decrypts a file using streaming.
-        Expects: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
+        Expects: [SALT(16)] + [NONCE(12)] + [CIPHERTEXT] + [TAG(16)]
         """
         try:
             file_size = os.path.getsize(input_path)
@@ -261,25 +220,38 @@ class CryptoEngine:
             footer_size = Config.TAG_SIZE
             
             if file_size < header_size + footer_size:
-                raise ValueError("File too small")
+                raise ValueError("File too small to be a valid archive.")
 
             with open(input_path, 'rb') as fin:
+                # Read Header
                 salt = fin.read(Config.SALT_SIZE)
                 nonce = fin.read(Config.NONCE_SIZE)
                 
+                # Initialize Cipher
                 key = self._derive_key(password, salt)
                 cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
                 
+                # Determine ciphertext length
                 ciphertext_len = file_size - header_size - footer_size
                 
+                # Prepare output
                 with open(output_path, 'wb') as fout:
                     decompressor = zlib.decompressobj() if compress else None
-                    bytes_read = 0
                     
+                    # Read loop for ciphertext
+                    bytes_read = 0
                     while bytes_read < ciphertext_len:
+                        # Calculate read size (don't read into tag)
                         read_size = min(Config.CHUNK_SIZE, ciphertext_len - bytes_read)
                         chunk = fin.read(read_size)
                         if not chunk: break
+                        
+                        # Decrypt
+                        # Note: GCM decrypt() doesn't verify until `verify()` is called with tag.
+                        # We must process everything first? 
+                        # WARNING: In streaming GCM, you technically shouldn't use the data until verified.
+                        # But for large files, we must write it out. 
+                        # If verification fails, we should delete the output file.
                         
                         decrypted_chunk = cipher.decrypt(chunk)
                         
@@ -292,6 +264,7 @@ class CryptoEngine:
                             
                         bytes_read += len(chunk)
 
+                    # Flush decompressor
                     if decompressor:
                         fout.write(decompressor.flush())
 
@@ -302,7 +275,8 @@ class CryptoEngine:
                         Logger.log('success', "Integrity Verified. Decryption successful.")
                     except ValueError:
                         Logger.log('error', "INTEGRITY CHECK FAILED! Password wrong or file corrupted.")
-                        fout.close()
+                        # Security: Delete the output file because it contains potentially malicious/garbage data.
+                        fout.close() # Ensure bad file is closed before removal
                         os.remove(output_path)
                         return False
             
@@ -321,10 +295,9 @@ class CryptoEngine:
 
 def parse_args():
     parser = argparse.ArgumentParser(description=Config.DESCRIPTION)
-    mode_group = parser.add_mutually_exclusive_group()
-    mode_group.add_argument('-e', '--encrypt', action='store_true', help='Encrypt mode (default)')
-    mode_group.add_argument('-d', '--decrypt', action='store_true', help='Decrypt mode')
-
+    
+    parser.add_argument('-m', '--mode', choices=['crypt', 'decrypt'], default='crypt', help='Operation mode')
+    
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-t', '--text', help='Text to process')
     group.add_argument('-i', '--input', help='Input file path')
@@ -332,7 +305,7 @@ def parse_args():
     parser.add_argument('-o', '--output', help='Output file path')
     parser.add_argument('-p', '--password', required=True, help='Password')
     parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
-    parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('-d', '--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('-v', '--version', action='version', version=Config.VERSION)
     
     return parser.parse_args()
@@ -345,9 +318,11 @@ def main():
     if args.debug:
         Logger.log('info', "Debug Mode Enabled")
 
+    start_time = time.time()
+
+    # TEXT MODE
     if args.text:
-        # Default to encrypt if decrypt is not explicitly set
-        if not args.decrypt:
+        if args.mode == 'crypt':
             Logger.log('info', "Encrypting text...")
             result = engine.encrypt_data(args.text.encode('utf-8'), args.password)
             b64_result = base64.b64encode(result).decode('utf-8')
@@ -362,21 +337,25 @@ def main():
             except Exception as e:
                 Logger.log('error', f"Failed: {e}")
 
+    # FILE MODE
     elif args.input:
         if not os.path.exists(args.input):
             Logger.log('error', f"File not found: {args.input}")
             sys.exit(1)
             
-        default_ext = '.enc' if not args.decrypt else '.dec'
+        default_ext = '.enc' if args.mode == 'crypt' else '.dec'
         output_file = args.output or (os.path.splitext(args.input)[0] + default_ext)
         
-        if not args.decrypt:
+        if args.mode == 'crypt':
             success = engine.encrypt_file(args.input, output_file, args.password, args.compress)
         else:
             success = engine.decrypt_file(args.input, output_file, args.password, args.compress)
             
         if not success:
             sys.exit(1)
+
+    elapsed = time.time() - start_time
+    Logger.log('info', f"Time elapsed: {elapsed:.2f}s")
 
 if __name__ == '__main__':
     main()
