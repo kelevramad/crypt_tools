@@ -1,132 +1,83 @@
-# Cryptographic Tool Documentation
+
+# Crypt Tools
 
 ## Overview
-This is a Python-based cryptographic tool that provides file and text encryption/decryption capabilities using AES encryption in CFB mode. The tool supports file compression, password-based encryption, and includes a command-line interface.
+`crypt_tools.py` is a robust command-line tool for encrypting and decrypting files and text using the AES (Advanced Encryption Standard) algorithm. This updated version features enhanced security using **PBKDF2** (Password-Based Key Derivation Function 2) with HMAC-SHA256 for key derivation and a random 16-byte salt, making it significantly more secure against brute-force and dictionary attacks than previous versions. It also supports optional zlib compression.
 
-## Core Classes
+## Key Features
+- **AES-256 Encryption**: Uses AES in **GCM (Galois/Counter Mode)** for authenticated encryption, ensuring both confidentiality and integrity.
+- **Robust Key Derivation**: Implements **PBKDF2-HMAC-SHA256** with 100,000 iterations and a random salt, ensuring strong key protection.
+- **Streamed Processing**: Processes files in 64KB chunks, allowing encryption of large files with minimal memory usage.
+- **Data Compression**: Optional Zlib compression to reduce file size before encryption.
+- **CLI Interface**: Easy-to-use command line interface for quick operations.
+- **Visual Feedback**: Colorful terminal output and clear status messages.
+- **Secure Defaults**: Automatically handles Nonce generation and Salt management.
 
-### Arguments
-Handles command-line argument parsing with the following options:
-- `-m/--mode`: Select between 'crypt' or 'decrypt' modes [default: crypt]
-- `-t/--text`: Plain-text input for encryption/decryption
-- `-i/--input`: Input file(s) for encryption/decryption
-- `-o/--output`: Output file for the result
-- `-p/--password`: Password for encryption/decryption (required)
-- `-c/--compress`: Enable compression before encryption/decompression after decryption
-- `-d/--debug`: Enable debugging information
-- `-v/--version`: Display version information
+## Installation
 
-### Colors
-Provides ANSI color codes for terminal output formatting:
-- Supports text styles (bold, underline, strikethrough)
-- Foreground colors (black, red, green, etc.)
-- Background colors (black, red, green, etc.)
+### Prerequisites
+- Python 3.13+
+- Dependencies (managed via `uv` or `pip`):
+  - `pycryptodome`
+  - `animation`
+  - `zlib` (Standard Library)
 
-### Banner
-Manages the application's ASCII art banners:
-- Contains multiple banner designs
-- Randomly selects one banner for display
-- Supports different ASCII art styles
-
-### Message
-Handles formatted message output with different severity levels:
-- `LIVE`: Success messages (green)
-- `DEAD`: Failure messages (red)
-- `DEBUG`: Debug information (yellow)
-- `ERROR`: Error messages (yellow)
-- `WARNING`: Warning messages (pink)
-- `INFO`: Information messages (blue)
-
-### Crypt
-Core encryption/decryption functionality:
-
-#### Key Methods:
-1. `trans(key)`:
-   - Converts password into MD5 hash digest for encryption key
-
-2. `humansize(nbytes)`:
-   - Converts byte sizes to human-readable format (KB, MB, GB, etc.)
-
-3. `encryption(plain_text, password)`:
-   - Encrypts data using AES-CFB mode
-   - Generates random IV (Initialization Vector)
-   - Returns base64 encoded encrypted data
-
-4. `decryption(encrypted, password)`:
-   - Decodes base64 encrypted data
-   - Extracts IV and decrypts using AES-CFB
-   - Returns original plaintext
-
-5. `compress(content)` / `decompress(content)`:
-   - Handles zlib compression/decompression
-   - Compression level 9 (maximum)
-
-6. `encrypt_file(file_input, file_output, password, compress)`:
-   - Loads file content
-   - Optionally compresses
-   - Encrypts content
-   - Writes to output file
-
-7. `decrypt_file(file_input, file_output, password, compress)`:
-   - Loads encrypted file
-   - Decrypts content
-   - Optionally decompresses
-   - Writes to output file
-
-## Security Features
-- Uses AES encryption in CFB (Cipher Feedback) mode
-- 16-byte block size
-- Random IV generation for each encryption
-- Password hashing using MD5
-- Base64 encoding for encrypted output
-- Optional compression using zlib
-
-## Usage Examples
-
-### Text Encryption
+### Setup
+ Clone the repository and install dependencies:
 ```bash
-python crypt_tools.py -m crypt -t "secret text" -p mypassword
+git clone https://github.com/kelevramad/crypt_tools.git
+cd crypt_tools
+uv sync  # or pip install -r requirements.txt if available
 ```
 
-### File Encryption
+## Usage
+
+### Encrypt a String
+Encrypt a plain text string directly from the terminal.
 ```bash
-python crypt_tools.py -m crypt -i file.txt -o encrypted.enc -p mypassword
+uv run crypt_tools.py --encrypt -t "Secret Message" -p "your_password"
 ```
 
-### File Encryption with Compression
+### Decrypt a String
+Decrypt a base64 encoded string.
 ```bash
-python crypt_tools.py -m crypt -i file.txt -o encrypted.enc -p mypassword -c
+uv run crypt_tools.py --decrypt -t "encrypted_base64_string" -p "your_password"
 ```
 
-### Text Decryption
+### Encrypt a File
+Encrypt a file (e.g., `document.txt`) to an encrypted output (default `.enc`).
 ```bash
-python crypt_tools.py -m decrypt -t "encrypted_text" -p mypassword
+# Basic encryption
+uv run crypt_tools.py --encrypt -i document.txt -p "your_password"
+
+# With compression
+uv run crypt_tools.py --encrypt -i document.txt -p "your_password" -c
 ```
 
-### File Decryption
+### Decrypt a File
+Decrypt an encrypted file (e.g., `document.enc`) back to its original form.
 ```bash
-python crypt_tools.py -m decrypt -i encrypted.enc -o decrypted.txt -p mypassword
+# Basic decryption
+uv run crypt_tools.py --decrypt -i document.enc -p "your_password"
+
+# With decompression (if encrypted with -c)
+uv run crypt_tools.py --decrypt -i document.enc -p "your_password" -c
 ```
 
-## Performance Features
-- Progress animation during operations
-- Execution time tracking
-- File size reporting
-- Memory-efficient file handling
+## Technical Details
+This tool improves upon older implementations by:
+1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
+2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
+3.  **Authentication**: Using AES-GCM provides a **16-byte Tag** to verify data integrity.
+4.  **Structure**:
+    - **Encrypted File Format**: `[Salt (16 bytes)] + [Nonce (12 bytes)] + [Encrypted Content] + [Tag (16 bytes)]`
 
-## Error Handling
-- Comprehensive exception handling for encryption/decryption operations
-- Detailed error messages with line numbers and exception details
-- Debug mode for additional information
-- Validation of input parameters
+> **Note**: Files encrypted with the old version (MD5-based) are **not compatible** with this version. You must decrypt them using the old tool before migrating.
 
-## Platform Support
-- Cross-platform compatibility (Windows/Linux)
-- Terminal clearing based on platform
-- ANSI color support for terminal output
+## Testing
+The project includes a comprehensive test suite covering CLI arguments, encryption logic, and error handling.
 
-## Notes
-- Default encryption mode if not specified
-- Supports batch file processing
-- Automatic output file naming (.enc/.dec extensions)
-- Command-line help documentation
+Run tests using:
+```bash
+uv run pytest
+```
