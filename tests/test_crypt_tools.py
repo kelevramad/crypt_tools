@@ -130,29 +130,84 @@ def test_file_compression(engine):
         for p in [input_path, enc_path, dec_path]:
             if os.path.exists(p): os.remove(p)
 
-def test_cli_integration(monkeypatch, capsys):
+@pytest.fixture
+def mock_getpass(monkeypatch):
+    import getpass
+    # Simple Mock: Always returns 'cli_pass'
+    # This satisfies "Enter Password" and "Verify Password" as checking p1 == p2 will pass ('cli_pass' == 'cli_pass')
+    monkeypatch.setattr(getpass, 'getpass', lambda prompt="": 'cli_pass')
+
+def test_cli_integration(monkeypatch, capsys, mock_getpass):
     """Test main() CLI wrapper."""
-    import sys
     
-    # Encrypt Text (Default mode)
-    monkeypatch.setattr(sys, 'argv', ['prog', '-t', 'CLI Test', '-p', 'cli_pass'])
-    main()
+    # Encrypt Text (Default mode) - No password arg provided, relies on getpass
+    # Pass arguments explicitly, skipping the program name (argparse expects args list not including prog if passed explicitly? 
+    # Wait, existing main calls parse_args(argv). parser.parse_args(argv) usually expects full list OR arguments only? 
+    # If argv is passed to parse_args, it is used INSTEAD of sys.argv[1:].
+    # So if I pass ['-t', '...'] it works. 
+    # If I pass ['prog', '-t', '...'] argparse might treat 'prog' as a positional arg? 
+    # NO: parser.parse_args(args) takes a list of strings to parse. The default is sys.argv[1:].
+    # So I should NOT include 'prog' in the list I pass.
+    
+    main(['-t', 'CLI Test'])
+    
     captured = capsys.readouterr()
     assert "Encrypted (Base64):" in captured.out
     
-    # Extract output manually from stdout is hard, let's use engine logic to verify decrypt flow
-    # Decrypt Text (Mocking input args not easy if we don't capture the B64 string dynamically)
-    # Instead, we test the error paths or simple flags
-    
     # Version
-    monkeypatch.setattr(sys, 'argv', ['prog', '-v'])
+    # Version action prints and then exits using sys.exit()
     with pytest.raises(SystemExit):
-        main()
+        main(['-v'])
     captured = capsys.readouterr()
-    assert Config.VERSION in captured.out or "" # Version action often prints to stderr or stdout depending on argparse version
+    assert Config.VERSION in captured.out or "" 
     
     # Debug
-    monkeypatch.setattr(sys, 'argv', ['prog', '--encrypt', '-t', 'A', '-p', 'B', '-d'])
-    main()
+    main(['--encrypt', '-t', 'A', '-p', 'B', '--debug'])
     captured = capsys.readouterr()
     assert "Debug Mode Enabled" in captured.out
+
+def test_cli_password_mismatch(monkeypatch, capsys):
+    """Test that password verification failure exits."""
+    import getpass
+    import sys
+    
+    # Mock getpass to return different passwords
+    # First call: "pass1", Second call: "pass2"
+    passwords = iter(["pass1", "pass2"])
+    monkeypatch.setattr(getpass, 'getpass', lambda prompt="": next(passwords))
+    
+    # Run encrypt (will prompt twice)
+    with pytest.raises(SystemExit) as excinfo:
+        main(['--encrypt', '-t', 'Verify Fail'])
+    
+    assert excinfo.value.code == 1
+    captured = capsys.readouterr()
+    assert "Passwords do not match!" in captured.out
+
+def test_recursive_directory(engine):
+    """Test recursive directory encryption."""
+    password = "dir_pass"
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        # Create structure
+        subdir = os.path.join(tmpdir, "subdir")
+        os.makedirs(subdir)
+        
+        with open(os.path.join(tmpdir, "file1.txt"), "w") as f: f.write("content1")
+        with open(os.path.join(subdir, "file2.txt"), "w") as f: f.write("content2")
+            
+        # Recursive Encrypt
+        main(['--encrypt', '-r', '-i', tmpdir, '-p', password])
+            
+        # Check files exist
+        assert os.path.exists(os.path.join(tmpdir, "file1.txt.enc"))
+        assert os.path.exists(os.path.join(subdir, "file2.txt.enc"))
+        
+        # Test Decrypt Recursively
+        main(['--decrypt', '-r', '-i', tmpdir, '-p', password])
+        
+        # Check restored files
+        with open(os.path.join(tmpdir, "file1.txt"), "r") as f: assert f.read() == "content1"
+        with open(os.path.join(subdir, "file2.txt"), "r") as f: assert f.read() == "content2"
+
+

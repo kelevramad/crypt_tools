@@ -16,7 +16,8 @@
 ### Pré-requisitos
 Certifique-se de ter as dependências instaladas (gerenciadas via `uv` ou `pip`):
 - `pycryptodome`
-- `animation`
+- `pycryptodome`
+- `tqdm` (Progress Bar)
 - `zlib` (biblioteca padrão)
 
 ### Comandos Básicos
@@ -33,7 +34,10 @@ uv run crypt_tools.py --decrypt -t "texto_criptografado_em_base64" -p "sua_senha
 
 #### Criptografar um Arquivo
 ```bash
-# Criptografa arquivo.txt e cria arquivo.enc
+# Criptografa arquivo.txt e cria arquivo.enc (pede senha e confirmação)
+uv run crypt_tools.py --encrypt -i arquivo.txt
+
+# Criptografa com senha fornecida
 uv run crypt_tools.py --encrypt -i arquivo.txt -p "sua_senha"
 
 # Com compressão
@@ -47,6 +51,11 @@ uv run crypt_tools.py --decrypt -i arquivo.enc -p "sua_senha"
 
 # Se foi comprimido, a descompressão é automática se usar a flag -c
 uv run crypt_tools.py --decrypt -i arquivo.enc -p "sua_senha" -c
+
+#### Criptografar Diretório (Recursivo)
+```bash
+uv run crypt_tools.py --encrypt -i ./minha_pasta -r
+```
 ```
 
 ## Estrutura do Código
