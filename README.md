@@ -1,8 +1,7 @@
-
 # Crypt Tools
 
 ## Overview
-`crypt_tools.py` is a robust command-line tool for encrypting and decrypting files and text using the AES (Advanced Encryption Standard) algorithm. This updated version features enhanced security using **PBKDF2** (Password-Based Key Derivation Function 2) with HMAC-SHA256 for key derivation and a random 16-byte salt, making it significantly more secure against brute-force and dictionary attacks than previous versions. It also supports optional zlib compression.
+`crypt_tools.py` is a robust command-line tool for encrypting and decryptating files and texts using the AES (Advanced Encryption Standard) algorithm. This updated version features enhanced security using **PBKDF2** (Password-Based Key Derivation Function 2) with HMAC-SHA256 for key derivation and a random 16-byte salt, making it significantly more secure against brute-force and dictionary attacks than previous versions. It also supports optional zlib compression.
 
 ## Key Features
 - **AES-256 Encryption**: Uses AES in **GCM (Galois/Counter Mode)** for authenticated encryption, ensuring both confidentiality and integrity.
@@ -10,7 +9,8 @@
 - **Streamed Processing**: Processes files in 64KB chunks, allowing encryption of large files with minimal memory usage.
 - **Data Compression**: Optional Zlib compression to reduce file size before encryption.
 - **CLI Interface**: Easy-to-use command line interface for quick operations.
-- **Visual Feedback**: Colorful terminal output and clear status messages.
+- **Visual Feedback**: Colorful terminal output, color-coded icons, and clear status messages.
+- **Banner Display**: Random ASCII art banner shown on startup.
 - **Secure Defaults**: Automatically handles Nonce generation and Salt management.
 
 ## Installation
@@ -19,12 +19,11 @@
 - Python 3.13+
 - Dependencies (managed via `uv` or `pip`):
   - `pycryptodome`
-  - `pycryptodome`
   - `tqdm` (Progress Bar)
   - `zlib` (Standard Library)
 
 ### Setup
- Clone the repository and install dependencies:
+Clone the repository and install dependencies:
 ```bash
 git clone https://github.com/kelevramad/crypt_tools.git
 cd crypt_tools
@@ -66,23 +65,90 @@ uv run crypt_tools.py --decrypt -i document.enc -p "your_password"
 
 # With decompression
 uv run crypt_tools.py --decrypt -i document.enc -p "your_password" -c
+```
 
 ### Encrypt a Directory (Recursive)
 Encrypt all files in a folder recursively.
 ```bash
 uv run crypt_tools.py --encrypt -i ./my_folder -r
 ```
+
+### Decrypt a Directory (Recursive)
+Decrypt all `.enc` files in a folder recursively.
+```bash
+uv run crypt_tools.py --decrypt -i ./my_folder -r
 ```
 
+### CLI Arguments
+
+| Argument | Short | Description |
+|----------|-------|-------------|
+| `--encrypt` | `-e` | Encrypt mode (default) |
+| `--decrypt` | `-d` | Decrypt mode |
+| `--text` | `-t` | Text to process |
+| `--input` | `-i` | Input file path |
+| `--output` | `-o` | Output file path |
+| `--password` | `-p` | Password (optional, will prompt if missing) |
+| `--compress` | `-c` | Enable compression |
+| `--recursive` | `-r` | Recursively process directories |
+| `--debug` | | Enable debug mode |
+| `--version` | `-v` | Show version |
+
+### Password Security
+- If no password is provided via `-p`, the tool will prompt securely using `getpass`
+- When encrypting, password verification is required (must enter twice)
+- Passwords are never stored or displayed
+
 ## Technical Details
+
+### Version 2.0.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
-3.  **Authentication**: Using AES-GCM provides a **16-byte Tag** to verify data integrity.
-4.  **Structure**:
-    - **Encrypted File Format**: `[Salt (16 bytes)] + [Nonce (12 bytes)] + [Encrypted Content] + [Tag (16 bytes)]`
+3.  **Nonce**: Using a **12-byte random nonce** (GCM standard).
+4.  **Authentication**: Using AES-GCM provides a **16-byte Tag** to verify data integrity.
+5.  **Chunk Size**: **64 KB** for streaming large files efficiently.
+6.  **PBKDF2 Iterations**: **100,000** iterations for key derivation.
+
+### File Formats
+
+**Encrypted File Format**:
+```
+[Salt (16 bytes)] + [Nonce (12 bytes)] + [Encrypted Content (Chunks)] + [GCM Tag (16 bytes)]
+```
+
+**In-Memory Data Format**:
+```
+[Salt (16 bytes)] + [Nonce (12 bytes)] + [GCM Tag (16 bytes)] + [Ciphertext]
+```
 
 > **Note**: Files encrypted with the old version (MD5-based) are **not compatible** with this version. You must decrypt them using the old tool before migrating.
+
+## Code Structure
+
+### Main Classes
+| Class | Description |
+|-------|-------------|
+| `Config` | Stores constants like key size, salt, nonce, tag sizes, and PBKDF2 iterations |
+| `CryptoEngine` | Core of the application. Manages key derivation, encryption, and decryption |
+| `Banner` | Displays random ASCII art banners on startup |
+| `Logger` | Color-coded logging system with icons for user feedback |
+| `TerminalColors` | ANSI color codes for terminal output |
+
+### CryptoEngine Methods
+| Method | Description |
+|--------|-------------|
+| `_derive_key(password, salt)` | Derives 256-bit key using PBKDF2-HMAC-SHA256 |
+| `_format_size(size)` | Converts bytes to human-readable format |
+| `encrypt_data(data, password)` | Encrypts bytes in memory |
+| `decrypt_data(enc_data, password)` | Decrypts bytes in memory |
+| `encrypt_file(input_path, output_path, password, compress)` | Encrypts file using streaming |
+| `decrypt_file(input_path, output_path, password, compress)` | Decrypts file using streaming |
+
+## Error Handling
+- **Integrity Check**: Failed decryption indicates wrong password or corrupted file
+- **File Operations**: Partial output files are removed on failure
+- **Memory Efficiency**: Large files are processed in chunks to minimize memory usage
 
 ## Testing
 The project includes a comprehensive test suite covering CLI arguments, encryption logic, and error handling.
@@ -91,3 +157,8 @@ Run tests using:
 ```bash
 uv run pytest
 ```
+
+---
+
+**Author**: Center For Cyber Intelligence  
+**Version**: 2.0.0
