@@ -303,8 +303,10 @@ class CryptoEngine:
                     tag = fin.read(Config.TAG_SIZE)
                     try:
                         cipher.verify(tag)
+                        print()  # Break line after progress bar
                         Logger.log('success', "Integrity Verified. Decryption successful.")
                     except ValueError:
+                        print()  # Break line after progress bar
                         Logger.log('error', "INTEGRITY CHECK FAILED! Password wrong or file corrupted.")
                         fout.close()
                         os.remove(output_path)
