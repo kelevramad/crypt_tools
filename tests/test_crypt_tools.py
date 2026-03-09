@@ -130,6 +130,38 @@ def test_file_compression(engine):
         for p in [input_path, enc_path, dec_path]:
             if os.path.exists(p): os.remove(p)
 
+def test_file_decryption_wrong_password_removes_output(engine):
+    """Test that a failed file decryption cleans up the partial output file."""
+    password = "correct_password"
+    content = b"Sensitive data block"
+    
+    fd, input_path = tempfile.mkstemp()
+    os.close(fd)
+    
+    with open(input_path, 'wb') as f:
+        f.write(content)
+        
+    enc_path = input_path + ".enc"
+    dec_path = input_path + ".dec"
+    
+    try:
+        # 1. Encrypt with valid password
+        assert engine.encrypt_file(input_path, enc_path, password)
+        assert os.path.exists(enc_path)
+        
+        # 2. Decrypt with wrong password
+        result = engine.decrypt_file(enc_path, dec_path, "wrong_password")
+        
+        # 3. Verify it failed
+        assert result is False
+        
+        # 4. Verify the generated output file is deleted
+        assert not os.path.exists(dec_path)
+        
+    finally:
+        for p in [input_path, enc_path, dec_path]:
+            if os.path.exists(p): os.remove(p)
+
 @pytest.fixture
 def mock_getpass(monkeypatch):
     import getpass
