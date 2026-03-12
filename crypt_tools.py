@@ -57,16 +57,23 @@ class TerminalColors:
         YELLOW = '\033[93m'
         BLUE = '\033[94m'
         CYAN = '\033[96m'
+        MAGENTA = '\033[95m'
 
 class Logger:
+    DEBUG_ENABLED = False
+
     @staticmethod
     def log(level: str, message: str) -> None:
         """Simple logger with icons."""
+        if level == 'debug' and not Logger.DEBUG_ENABLED:
+            return
+
         icons = {
             'info': (TerminalColors.Foreground.BLUE, '[*]'),
             'success': (TerminalColors.Foreground.GREEN, '[+]'),
             'error': (TerminalColors.Foreground.RED, '[-]'),
             'warning': (TerminalColors.Foreground.YELLOW, '[!]'),
+            'debug': (TerminalColors.Foreground.MAGENTA, '[D]'),
         }
         color, icon = icons.get(level, (TerminalColors.RESET, '[?]'))
         print(f"{color}{icon} {message}{TerminalColors.RESET}")
@@ -145,6 +152,7 @@ class CryptoEngine:
 
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         """Derive a 256-bit key from password and salt using PBKDF2."""
+        Logger.log('debug', f"Deriving key with PBKDF2 ({Config.PBKDF2_ITERATIONS} iterations)")
         return hashlib.pbkdf2_hmac(
             'sha256', 
             password.encode('utf-8'), 
@@ -166,12 +174,16 @@ class CryptoEngine:
         Encrypt bytes in memory.
         Format: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
         """
+        Logger.log('debug', f"Starting in-memory data encryption ({len(data)} bytes input)")
         salt = os.urandom(Config.SALT_SIZE)
         nonce = os.urandom(Config.NONCE_SIZE)
+        Logger.log('debug', f"Generated salt ({Config.SALT_SIZE} bytes) and nonce ({Config.NONCE_SIZE} bytes)")
         key = self._derive_key(password, salt)
         
+        Logger.log('debug', "Initializing AES-GCM cipher")
         cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
         ciphertext, tag = cipher.encrypt_and_digest(data)
+        Logger.log('debug', f"Encryption complete. Ciphertext size: {len(ciphertext)} bytes, Tag size: {len(tag)} bytes")
         
         return salt + nonce + tag + ciphertext
 
@@ -181,19 +193,26 @@ class CryptoEngine:
         Expects: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
         """
         try:
+            Logger.log('debug', f"Starting in-memory data decryption. Total input size: {len(enc_data)} bytes")
             overhead = Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
             if len(enc_data) < overhead:
+                Logger.log('debug', "Input data is smaller than minimum overhead")
                 raise ValueError("Data too short")
 
             salt = enc_data[:Config.SALT_SIZE]
             nonce = enc_data[Config.SALT_SIZE : Config.SALT_SIZE + Config.NONCE_SIZE]
             tag = enc_data[Config.SALT_SIZE + Config.NONCE_SIZE : overhead]
             ciphertext = enc_data[overhead:]
+            Logger.log('debug', f"Extracted salt, nonce, tag, and ciphertext ({len(ciphertext)} bytes)")
 
             key = self._derive_key(password, salt)
+            Logger.log('debug', "Initializing AES-GCM cipher for decryption")
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
             
-            return cipher.decrypt_and_verify(ciphertext, tag)
+            Logger.log('debug', "Verifying tag and decrypting ciphertext")
+            decrypted = cipher.decrypt_and_verify(ciphertext, tag)
+            Logger.log('debug', f"Decryption successful. Plaintext size: {len(decrypted)} bytes")
+            return decrypted
             
         except (ValueError, KeyError) as e:
             Logger.log('error', f"Decryption failed: {str(e)}")
@@ -205,12 +224,15 @@ class CryptoEngine:
         Format: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
         """
         try:
+            Logger.log('debug', f"Starting file encryption: {input_path} -> {output_path}")
             file_size = os.path.getsize(input_path)
             Logger.log('info', f"Processing {input_path} ({self._format_size(file_size)})")
             
+            Logger.log('debug', f"Generating {Config.SALT_SIZE} bytes salt and {Config.NONCE_SIZE} bytes nonce")
             salt = os.urandom(Config.SALT_SIZE)
             nonce = os.urandom(Config.NONCE_SIZE)
             key = self._derive_key(password, salt)
+            Logger.log('debug', "Initializing AES-GCM cipher")
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
 
             with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
@@ -219,11 +241,14 @@ class CryptoEngine:
                 fout.write(nonce)
                 
                 compressor = zlib.compressobj(level=9) if compress else None
+                if compress:
+                    Logger.log('debug', "Compression enabled (zlib level 9)")
                 
                 with tqdm(total=file_size, unit='B', unit_scale=True, desc="Encrypting", leave=False) as pbar:
                     while True:
                         chunk = fin.read(Config.CHUNK_SIZE)
                         if not chunk:
+                            Logger.log('debug', "Reached end of input file")
                             break
                         
                         if compressor:
@@ -238,10 +263,12 @@ class CryptoEngine:
                 if compressor:
                     remaining = compressor.flush()
                     if remaining:
+                        Logger.log('debug', f"Writing remaining compressed data ({len(remaining)} bytes)")
                         fout.write(cipher.encrypt(remaining))
                 
                 # Calculate and write Tag at the end
                 tag = cipher.digest()
+                Logger.log('debug', f"Writing authentication tag ({len(tag)} bytes)")
                 fout.write(tag)
                 
             Logger.log('success', f"File encrypted: {output_path}")
@@ -260,20 +287,25 @@ class CryptoEngine:
         """
         try:
             file_size = os.path.getsize(input_path)
+            Logger.log('debug', f"Starting file decryption: {input_path} (size: {self._format_size(file_size)}) -> {output_path}")
             header_size = Config.SALT_SIZE + Config.NONCE_SIZE
             footer_size = Config.TAG_SIZE
             
             if file_size < header_size + footer_size:
+                Logger.log('debug', "File size is smaller than required header + footer overhead")
                 raise ValueError("File too small")
 
             with open(input_path, 'rb') as fin:
                 salt = fin.read(Config.SALT_SIZE)
                 nonce = fin.read(Config.NONCE_SIZE)
                 
+                Logger.log('debug', f"Read salt ({len(salt)} bytes) and nonce ({len(nonce)} bytes)")
                 key = self._derive_key(password, salt)
+                Logger.log('debug', "Initializing AES-GCM cipher for decryption")
                 cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
                 
                 ciphertext_len = file_size - header_size - footer_size
+                Logger.log('debug', f"Ciphertext length to decrypt: {self._format_size(ciphertext_len)}")
                 
                 with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc="Decrypting", leave=False) as pbar:
                     decompressor = zlib.decompressobj() if compress else None
@@ -282,7 +314,9 @@ class CryptoEngine:
                     while bytes_read < ciphertext_len:
                         read_size = min(Config.CHUNK_SIZE, ciphertext_len - bytes_read)
                         chunk = fin.read(read_size)
-                        if not chunk: break
+                        if not chunk: 
+                            Logger.log('debug', "Unexpected end of file while reading ciphertext")
+                            break
                         
                         decrypted_chunk = cipher.decrypt(chunk)
                         
@@ -297,11 +331,14 @@ class CryptoEngine:
                         pbar.update(len(chunk))
 
                     if decompressor:
+                        Logger.log('debug', "Flushing decompressor buffers")
                         fout.write(decompressor.flush())
 
                     # Verify Tag
                     tag = fin.read(Config.TAG_SIZE)
+                    Logger.log('debug', f"Read authentication tag ({len(tag)} bytes)")
                     try:
+                        Logger.log('debug', "Verifying authentication tag")
                         cipher.verify(tag)
                         print()  # Break line after progress bar
                         Logger.log('success', "Integrity Verified. Decryption successful.")
@@ -352,7 +389,8 @@ def main(argv=None):
     engine = CryptoEngine()
     
     if args.debug:
-        Logger.log('info', "Debug Mode Enabled")
+        Logger.DEBUG_ENABLED = True
+        Logger.log('debug', "Debug Mode Enabled. Verbose logging activated.")
 
     # Secure Password Input
     if not args.password:
@@ -363,6 +401,7 @@ def main(argv=None):
         
         # Verify password if encrypting
         if not args.decrypt:
+            Logger.log('debug', "Prompting for verification password")
             verify_pass = getpass.getpass("Verify Password: ")
             if args.password != verify_pass:
                 Logger.log('error', "Passwords do not match!")
@@ -378,6 +417,7 @@ def main(argv=None):
         else:
             Logger.log('info', "Decrypting text...")
             try:
+                Logger.log('debug', "Decoding Base64 text input")
                 raw_data = base64.b64decode(args.text)
                 result = engine.decrypt_data(raw_data, args.password)
                 if result:
@@ -386,11 +426,13 @@ def main(argv=None):
                 Logger.log('error', f"Failed: {e}")
 
     elif args.input:
+        Logger.log('debug', f"Input specified: {args.input}")
         
         # Recursive Directory Processing
         if args.recursive and os.path.isdir(args.input):
             input_dir = args.input
             Logger.log('info', f"Processing directory: {input_dir}")
+            Logger.log('debug', "Recursive mode enabled")
             
             success_count = 0
             fail_count = 0
