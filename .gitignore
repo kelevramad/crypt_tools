@@ -178,3 +178,7 @@ pyrightconfig.json
 # Generated using ignr.py - github.com/Antrikshy/ignr.py
 
 crypt_tools.spec
+__pycache__/
+.vscode/
+tests/__pycache__/
+__init__.py.bak
