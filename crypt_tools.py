@@ -374,7 +374,7 @@ def parse_args(argv=None):
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-t', '--text', help='Text to process')
-    group.add_argument('-i', '--input', help='Input file path')
+    group.add_argument('-f', '--file', help='File path to process')
     
     parser.add_argument('-o', '--output', help='Output file path')
     parser.add_argument('-p', '--password', required=False, help='Password (optional, will prompt if missing)')
@@ -433,12 +433,12 @@ def main(argv=None):
             except Exception as e:
                 Logger.log('error', f"Failed: {e}")
 
-    elif args.input:
-        Logger.log('debug', f"Input specified: {args.input}")
+    elif args.file:
+        Logger.log('debug', f"File specified: {args.file}")
         
         # Recursive Directory Processing
-        if args.recursive and os.path.isdir(args.input):
-            input_dir = args.input
+        if args.recursive and os.path.isdir(args.file):
+            input_dir = args.file
             Logger.log('info', f"Processing directory: {input_dir}")
             Logger.log('debug', "Recursive mode enabled")
             
@@ -474,23 +474,23 @@ def main(argv=None):
             
             Logger.log('info', f"Batch complete. Success: {success_count}, Failed: {fail_count}")
 
-        elif os.path.exists(args.input):
-            if os.path.isdir(args.input):
-                 Logger.log('error', f"Input is a directory. Use -r/--recursive to process directories.")
+        elif os.path.exists(args.file):
+            if os.path.isdir(args.file):
+                 Logger.log('error', f"Path is a directory. Use -r/--recursive to process directories.")
                  sys.exit(1)
 
             default_ext = '.enc' if not args.decrypt else '.dec'
-            output_file = args.output or (os.path.splitext(args.input)[0] + default_ext)
+            output_file = args.output or (os.path.splitext(args.file)[0] + default_ext)
             
             if not args.decrypt:
-                success = engine.encrypt_file(args.input, output_file, args.password, args.compress)
+                success = engine.encrypt_file(args.file, output_file, args.password, args.compress)
             else:
-                success = engine.decrypt_file(args.input, output_file, args.password, args.compress)
+                success = engine.decrypt_file(args.file, output_file, args.password, args.compress)
                 
             if not success:
                 sys.exit(1)
         else:
-            Logger.log('error', f"File not found: {args.input}")
+            Logger.log('error', f"File not found: {args.file}")
             sys.exit(1)
 
 if __name__ == '__main__':
