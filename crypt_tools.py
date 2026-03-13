@@ -139,9 +139,11 @@ class Banner:
     def show(cls):
         """Displays a random banner."""
         banner = cls.__BANNER[random.randint(0, len(cls.__BANNER) - 1)]
-        print(f"{TerminalColors.Foreground.CYAN}{banner}{TerminalColors.RESET}")
-        print(f"{TerminalColors.Foreground.CYAN}{Config.DESCRIPTION} v{Config.VERSION}{TerminalColors.RESET}")
-        print(f"{TerminalColors.Foreground.CYAN}Author: {Config.AUTHOR}{TerminalColors.RESET}\n")
+        cyan = TerminalColors.Foreground.CYAN
+        reset = TerminalColors.RESET
+        print(f"{cyan}{banner}{reset}")
+        print(f"{cyan}{Config.DESCRIPTION} v{Config.VERSION}{reset}")
+        print(f"{cyan}Author: {Config.AUTHOR}{reset}\n")
 
 # =========================
 # Core Logic (Engine)
