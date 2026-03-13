@@ -58,6 +58,7 @@ class TerminalColors:
         BLUE = '\033[94m'
         CYAN = '\033[96m'
         MAGENTA = '\033[95m'
+        WHITE = '\033[97m'
 
 class Logger:
     DEBUG_ENABLED = False
@@ -69,14 +70,16 @@ class Logger:
             return
 
         icons = {
-            'info': (TerminalColors.Foreground.BLUE, '[*]'),
-            'success': (TerminalColors.Foreground.GREEN, '[+]'),
-            'error': (TerminalColors.Foreground.RED, '[-]'),
-            'warning': (TerminalColors.Foreground.YELLOW, '[!]'),
-            'debug': (TerminalColors.Foreground.MAGENTA, '[D]'),
+            'info': (TerminalColors.Foreground.BLUE, 'ℹ️'),
+            'success': (TerminalColors.Foreground.GREEN, '✅'),
+            'error': (TerminalColors.Foreground.RED, '❌'),
+            'warning': (TerminalColors.Foreground.YELLOW, '⚠️'),
+            'debug': (TerminalColors.Foreground.MAGENTA, '🐞'),
         }
-        color, icon = icons.get(level, (TerminalColors.RESET, '[?]'))
-        print(f"{color}{icon} {message}{TerminalColors.RESET}")
+        color, icon = icons.get(level, (TerminalColors.RESET, '❓'))
+        white = TerminalColors.Foreground.WHITE
+        reset = TerminalColors.RESET
+        print(f"{white}[{reset}{icon}{white}]{reset} {color}{message}{reset}")
 
 class Banner:
     """
@@ -244,11 +247,10 @@ class CryptoEngine:
                 if compress:
                     Logger.log('debug', "Compression enabled (zlib level 9)")
                 
-                with tqdm(total=file_size, unit='B', unit_scale=True, desc="Encrypting", leave=False) as pbar:
+                with tqdm(total=file_size, unit='B', unit_scale=True, desc="[🔒] Encrypting") as pbar:
                     while True:
                         chunk = fin.read(Config.CHUNK_SIZE)
                         if not chunk:
-                            Logger.log('debug', "Reached end of input file")
                             break
                         
                         if compressor:
@@ -259,6 +261,8 @@ class CryptoEngine:
                             fout.write(cipher.encrypt(chunk))
                         
                         pbar.update(len(chunk))
+                
+                Logger.log('debug', "Reached end of input file")
                 
                 if compressor:
                     remaining = compressor.flush()
@@ -307,15 +311,14 @@ class CryptoEngine:
                 ciphertext_len = file_size - header_size - footer_size
                 Logger.log('debug', f"Ciphertext length to decrypt: {self._format_size(ciphertext_len)}")
                 
-                with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc="Decrypting", leave=False) as pbar:
+                with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc="[🔓] Decrypting") as pbar:
                     decompressor = zlib.decompressobj() if compress else None
                     bytes_read = 0
                     
                     while bytes_read < ciphertext_len:
                         read_size = min(Config.CHUNK_SIZE, ciphertext_len - bytes_read)
                         chunk = fin.read(read_size)
-                        if not chunk: 
-                            Logger.log('debug', "Unexpected end of file while reading ciphertext")
+                        if not chunk:
                             break
                         
                         decrypted_chunk = cipher.decrypt(chunk)
@@ -330,6 +333,9 @@ class CryptoEngine:
                         bytes_read += len(chunk)
                         pbar.update(len(chunk))
 
+                if bytes_read < ciphertext_len:
+                    Logger.log('warning', "Unexpected end of file while reading ciphertext")
+
                     if decompressor:
                         Logger.log('debug', "Flushing decompressor buffers")
                         fout.write(decompressor.flush())
@@ -340,10 +346,8 @@ class CryptoEngine:
                     try:
                         Logger.log('debug', "Verifying authentication tag")
                         cipher.verify(tag)
-                        print()  # Break line after progress bar
                         Logger.log('success', "Integrity Verified. Decryption successful.")
                     except ValueError:
-                        print()  # Break line after progress bar
                         Logger.log('error', "INTEGRITY CHECK FAILED! Password wrong or file corrupted.")
                         fout.close()
                         os.remove(output_path)
@@ -394,6 +398,9 @@ def main(argv=None):
 
     # Secure Password Input
     if not args.password:
+        white = TerminalColors.Foreground.WHITE
+        reset = TerminalColors.RESET
+        print(f"{white}[{reset}🔑{white}]{reset} ", end='', flush=True)
         args.password = getpass.getpass("Enter Password: ")
         if not args.password:
              Logger.log('error', "Password cannot be empty.")
@@ -402,6 +409,7 @@ def main(argv=None):
         # Verify password if encrypting
         if not args.decrypt:
             Logger.log('debug', "Prompting for verification password")
+            print(f"{white}[{reset}🔄{white}]{reset} ", end='', flush=True)
             verify_pass = getpass.getpass("Verify Password: ")
             if args.password != verify_pass:
                 Logger.log('error', "Passwords do not match!")
