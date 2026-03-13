@@ -158,6 +158,47 @@ Run tests using:
 uv run pytest
 ```
 
+## Building Executable
+
+You can compile `crypt_tools.py` into a standalone executable file (.exe) using **PyInstaller**. This allows you to run the tool on systems without Python installed.
+
+### Using `uv` (Recommended)
+If you are using `uv`, you can run PyInstaller in a temporary environment with all required dependencies:
+
+```bash
+uvx --with pycryptodome --with tqdm pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
+```
+
+### Using `pipx`
+If you prefer `pipx`, you need to install PyInstaller and then inject the extra dependencies into its environment:
+
+```bash
+# 1. Install PyInstaller
+pipx install pyinstaller
+
+# 2. Inject dependencies
+pipx inject pyinstaller pycryptodome tqdm
+
+# 3. Create the executable
+pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
+```
+
+### Global Installation
+If you prefer to have `pyinstaller` available globally on your system, you can install it using `uv` or `pip`:
+
+```bash
+# Using uv
+uv tool install pyinstaller --with pycryptodome --with tqdm
+
+# Using pip
+pip install -g pyinstaller pycryptodome tqdm
+```
+
+Once installed globally, you can generate the EXE directly:
+```bash
+pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
+```
+
 ---
 
 **Author**: Center For Cyber Intelligence  
