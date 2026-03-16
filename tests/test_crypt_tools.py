@@ -3,9 +3,9 @@ import pytest
 import tempfile
 import base64
 from crypt_tools import (
-    CryptoEngine, 
-    Config, 
-    Logger, 
+    CryptoEngine,
+    Config,
+    ConsoleLogger,
     TerminalColors,
     main
 )
@@ -219,25 +219,25 @@ def test_cli_password_mismatch(monkeypatch, capsys):
 def test_recursive_directory(engine):
     """Test recursive directory encryption."""
     password = "dir_pass"
-    
+
     with tempfile.TemporaryDirectory() as tmpdir:
         # Create structure
         subdir = os.path.join(tmpdir, "subdir")
         os.makedirs(subdir)
-        
+
         with open(os.path.join(tmpdir, "file1.txt"), "w") as f: f.write("content1")
         with open(os.path.join(subdir, "file2.txt"), "w") as f: f.write("content2")
-            
-        # Recursive Encrypt
-        main(['--encrypt', '-r', '-i', tmpdir, '-p', password])
-            
+
+        # Recursive Encrypt (use -f for file/directory path)
+        main(['--encrypt', '-r', '-f', tmpdir, '-p', password])
+
         # Check files exist
         assert os.path.exists(os.path.join(tmpdir, "file1.txt.enc"))
         assert os.path.exists(os.path.join(subdir, "file2.txt.enc"))
-        
+
         # Test Decrypt Recursively
-        main(['--decrypt', '-r', '-i', tmpdir, '-p', password])
-        
+        main(['--decrypt', '-r', '-f', tmpdir, '-p', password])
+
         # Check restored files
         with open(os.path.join(tmpdir, "file1.txt"), "r") as f: assert f.read() == "content1"
         with open(os.path.join(subdir, "file2.txt"), "r") as f: assert f.read() == "content2"
