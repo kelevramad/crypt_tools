@@ -43,7 +43,8 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **File Encryption** | Encrypt/decrypt individual files |
 | **Recursive Directory Processing** | Batch encrypt/decrypt entire directory trees |
 | **Secure Password Handling** | Interactive prompts with verification (encrypt mode) |
-| **Visual Feedback** | Progress bars, color-coded logs, ASCII banners |
+| **Visual Feedback** | Progress bars, color-coded logs with emojis, ASCII banners |
+| **File Logging** | Optional timestamped log file for audit trail |
 
 ### 3.2 Security Features
 
@@ -82,7 +83,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `Config` | Constants for crypto parameters |
 | `CryptoEngine` | Core encryption/decryption logic |
 | `Banner` | ASCII art display on startup |
-| `Logger` | Color-coded console output |
+| `ConsoleLogger` | Unified console and file logging with emojis |
 | `TerminalColors` | ANSI color codes |
 | `main()` | CLI entry point and argument handling |
 
@@ -119,6 +120,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--password` | `-p` | Password | Interactive prompt |
 | `--compress` | `-c` | Enable zlib compression | Disabled |
 | `--recursive` | `-r` | Process directories recursively | Disabled |
+| `--log` | — | Enable file logging to `crypt_tools.log` | Disabled |
 | `--debug` | — | Enable debug logging | Disabled |
 | `--version` | `-v` | Show version | — |
 
@@ -142,6 +144,9 @@ uv run crypt_tools.py --encrypt -i ./my_folder -r -p "password"
 
 # Decrypt directory recursively
 uv run crypt_tools.py --decrypt -i ./my_folder -r -p "password"
+
+# Enable file logging
+uv run crypt_tools.py --encrypt -i document.txt -p "password" --log
 ```
 
 ---
@@ -195,9 +200,10 @@ uv run pytest --cov=crypt_tools --cov-report=html
 | Limitation | Details |
 |------------|---------|
 | **Version Compatibility** | v2.0.0 not compatible with v1.x (MD5-based) |
-| **File Extension** | Encrypted files use `.enc` by default |
+| **File Extension** | Encrypted files use `.enc` by default; decrypted files use `.dec` |
 | **Interactive Mode** | Requires terminal for password prompts |
 | **Memory** | Chunk-based but requires ~64KB buffer |
+| **Log File** | Log file accumulates entries; manual cleanup required |
 
 ---
 
@@ -217,7 +223,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.0.0 | 2026 | AES-GCM, PBKDF2, streaming, compression |
+| 2.0.0 | 2026 | AES-GCM, PBKDF2, streaming, compression, OutputManager, file logging |
 | 1.x | — | Legacy MD5-based (deprecated) |
 
 ---
@@ -241,5 +247,5 @@ crypt_tools/
 
 ---
 
-**Document Version:** 1.0  
-**Last Updated:** March 9, 2026
+**Document Version:** 1.1
+**Last Updated:** March 16, 2026

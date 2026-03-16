@@ -9,8 +9,8 @@
 - **Streamed Processing**: Processes files in 64KB chunks, allowing encryption of large files with minimal memory usage.
 - **Data Compression**: Optional Zlib compression to reduce file size before encryption.
 - **CLI Interface**: Easy-to-use command line interface for quick operations.
-- **Visual Feedback**: Colorful terminal output, color-coded icons, and clear status messages.
-- **Banner Display**: Random ASCII art banner shown on startup.
+- **Visual Feedback**: Colorful terminal output with emojis, color-coded status messages, and ASCII art banners.
+- **File Logging**: Optional timestamped log file (`crypt_tools.log`) for audit trails.
 - **Secure Defaults**: Automatically handles Nonce generation and Salt management.
 
 ## Installation
@@ -91,13 +91,20 @@ uv run crypt_tools.py --decrypt -i ./my_folder -r
 | `--password` | `-p` | Password (optional, will prompt if missing) |
 | `--compress` | `-c` | Enable compression |
 | `--recursive` | `-r` | Recursively process directories |
-| `--debug` | | Enable debug mode |
+| `--log` | — | Enable logging to file (`crypt_tools.log`) |
+| `--debug` | — | Enable debug mode |
 | `--version` | `-v` | Show version |
 
 ### Password Security
 - If no password is provided via `-p`, the tool will prompt securely using `getpass`
 - When encrypting, password verification is required (must enter twice)
 - Passwords are never stored or displayed
+
+### File Logging
+- Use `--log` flag to enable logging to `crypt_tools.log`
+- Log entries include timestamps, log level, emoji icons, and operation details
+- Useful for audit trails and debugging
+- Log file accumulates entries; manual cleanup may be required
 
 ## Technical Details
 
@@ -132,7 +139,7 @@ This tool improves upon older implementations by:
 | `Config` | Stores constants like key size, salt, nonce, tag sizes, and PBKDF2 iterations |
 | `CryptoEngine` | Core of the application. Manages key derivation, encryption, and decryption |
 | `Banner` | Displays random ASCII art banners on startup |
-| `Logger` | Color-coded logging system with icons for user feedback |
+| `ConsoleLogger` | Unified console and file logging with emojis and colors |
 | `TerminalColors` | ANSI color codes for terminal output |
 
 ### CryptoEngine Methods
@@ -149,6 +156,7 @@ This tool improves upon older implementations by:
 - **Integrity Check**: Failed decryption indicates wrong password or corrupted file
 - **File Operations**: Partial output files are removed on failure
 - **Memory Efficiency**: Large files are processed in chunks to minimize memory usage
+- **Logging**: All operations logged to `crypt_tools.log` when `--log` flag is enabled
 
 ## Testing
 The project includes a comprehensive test suite covering CLI arguments, encryption logic, and error handling.
