@@ -62,9 +62,11 @@ class TerminalColors:
 
 class Logger:
     DEBUG_ENABLED = False
+    LOG_ENABLED = False
+    LOG_FILE = "crypt_tools.log"
 
     @staticmethod
-    def log(level: str, message: str) -> None:
+    def log(level: str, message: str, to_console: bool = True) -> None:
         """Simple logger with icons."""
         if level == 'debug' and not Logger.DEBUG_ENABLED:
             return
@@ -79,7 +81,22 @@ class Logger:
         color, icon = icons.get(level, (TerminalColors.RESET, '❓'))
         white = TerminalColors.Foreground.WHITE
         reset = TerminalColors.RESET
-        print(f"{white}[{reset}{icon}{white}]{reset} {color}{message}{reset}")
+        
+        # Write to log file if enabled (always, regardless of to_console)
+        if Logger.LOG_ENABLED:
+            Logger._write_to_file(level, message)
+        
+        # Print to console only if to_console is True
+        if to_console:
+            print(f"{white}[{reset}{icon}{white}]{reset} {color}{message}{reset}")
+
+    @staticmethod
+    def _write_to_file(level: str, message: str) -> None:
+        """Write log message to file."""
+        timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        log_entry = f"[{timestamp}] [{level.upper()}] {message}\n"
+        with open(Logger.LOG_FILE, 'a', encoding='utf-8') as f:
+            f.write(log_entry)
 
 class Banner:
     """
@@ -231,7 +248,6 @@ class CryptoEngine:
         try:
             Logger.log('debug', f"Starting file encryption: {input_path} -> {output_path}")
             file_size = os.path.getsize(input_path)
-            Logger.log('info', f"Processing {input_path} ({self._format_size(file_size)})")
             
             Logger.log('debug', f"Generating {Config.SALT_SIZE} bytes salt and {Config.NONCE_SIZE} bytes nonce")
             salt = os.urandom(Config.SALT_SIZE)
@@ -276,12 +292,17 @@ class CryptoEngine:
                 tag = cipher.digest()
                 Logger.log('debug', f"Writing authentication tag ({len(tag)} bytes)")
                 fout.write(tag)
-                
-            Logger.log('success', f"File encrypted: {output_path}")
+
+            white = TerminalColors.Foreground.WHITE
+            reset = TerminalColors.RESET
+            green = TerminalColors.Foreground.GREEN
+            Logger.log('success', f"File encrypted: {output_path} ({self._format_size(os.path.getsize(output_path))})", to_console=False)
+            print(f"{white}[{reset}📄{white}]{reset} {green}File encrypted: {output_path} ({self._format_size(os.path.getsize(output_path))}){reset}")
             return True
 
         except Exception as e:
             Logger.log('error', f"File encryption error: {e}")
+            Logger.log('error', f"Failed to encrypt: {input_path}")
             if os.path.exists(output_path):
                 os.remove(output_path)
             return False
@@ -348,19 +369,28 @@ class CryptoEngine:
                     try:
                         Logger.log('debug', "Verifying authentication tag")
                         cipher.verify(tag)
-                        Logger.log('success', "Integrity Verified. Decryption successful.")
                     except ValueError:
                         Logger.log('error', "INTEGRITY CHECK FAILED! Password wrong or file corrupted.")
+                        Logger.log('error', f"Decryption failed for: {input_path}")
                         fout.close()
                         os.remove(output_path)
                         return False
-            
+
+            white = TerminalColors.Foreground.WHITE
+            reset = TerminalColors.RESET
+            yellow = TerminalColors.Foreground.YELLOW
+            green = TerminalColors.Foreground.GREEN
+            Logger.log('success', "Integrity Verified. Decryption successful.", to_console=False)
+            Logger.log('success', f"File decrypted: {output_path} ({self._format_size(os.path.getsize(output_path))})", to_console=False)
+            print(f"{white}[{reset}✅{white}]{reset} {green}Integrity Verified. Decryption successful.{reset}")
+            print(f"{white}[{reset}📄{white}]{reset} {green}File decrypted: {output_path} ({self._format_size(os.path.getsize(output_path))}){reset}")
             return True
 
         except Exception as e:
             Logger.log('error', f"File decryption error: {e}")
+            Logger.log('error', f"Failed to decrypt: {input_path}")
             if os.path.exists(output_path):
-                try: os.remove(output_path) 
+                try: os.remove(output_path)
                 except: pass
             return False
 
@@ -383,6 +413,7 @@ def parse_args(argv=None):
     parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
     parser.add_argument('-r', '--recursive', action='store_true', help='Recursively process directories')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
+    parser.add_argument('--log', action='store_true', help='Enable logging to file')
     parser.add_argument('-v', '--version', action='version', version=Config.VERSION)
     
     return parser.parse_args(argv)
@@ -397,6 +428,13 @@ def main(argv=None):
     if args.debug:
         Logger.DEBUG_ENABLED = True
         Logger.log('debug', "Debug Mode Enabled. Verbose logging activated.")
+        Logger.log('info', "Debug mode: Enabled", to_console=False)
+
+    if args.log:
+        Logger.LOG_ENABLED = True
+        Logger.log('debug', f"Logging enabled. Writing to: {Logger.LOG_FILE}")
+        Logger.log('info', f"Log file: {Logger.LOG_FILE}", to_console=False)
+        Logger.log('info', "Logging to file: Enabled", to_console=False)
 
     # Secure Password Input
     if not args.password:
@@ -404,36 +442,78 @@ def main(argv=None):
         reset = TerminalColors.RESET
         print(f"{white}[{reset}🔑{white}]{reset} ", end='', flush=True)
         args.password = getpass.getpass("Enter Password: ")
+        Logger.log('info', "Password entered by user", to_console=False)
         if not args.password:
              Logger.log('error', "Password cannot be empty.")
+             Logger.log('error', "Operation aborted: No password provided")
              sys.exit(1)
-        
+
         # Verify password if encrypting
         if not args.decrypt:
             Logger.log('debug', "Prompting for verification password")
             print(f"{white}[{reset}🔄{white}]{reset} ", end='', flush=True)
             verify_pass = getpass.getpass("Verify Password: ")
+            Logger.log('info', "Password verification entered", to_console=False)
             if args.password != verify_pass:
                 Logger.log('error', "Passwords do not match!")
+                Logger.log('error', "Operation aborted due to password mismatch")
                 sys.exit(1)
+    else:
+        Logger.log('debug', "Password provided via command line")
 
     if args.text:
+        # Display formatted status with emojis for text mode
+        white = TerminalColors.Foreground.WHITE
+        reset = TerminalColors.RESET
+        mode_str = "decrypt" if args.decrypt else "encrypt"
+        compression_str = "disabled"  # Compression not available for text mode
+        lock_emoji = "🔓" if args.decrypt else "🔐"
+        green = TerminalColors.Foreground.GREEN
+        blue = TerminalColors.Foreground.BLUE
+
+        Logger.log('info', f"Mode: {mode_str}", to_console=False)
+        Logger.log('info', f"Compression: {compression_str}", to_console=False)
+        Logger.log('info', "Processing text...", to_console=False)
+        Logger.log('info', f"Input text length: {len(args.text)} characters", to_console=False)
+        print(f"{white}[{reset}{lock_emoji}{white}]{reset} {white}Mode: {mode_str}{reset}")
+        print(f"{white}[{reset}📦{white}]{reset} {white}Compression: {compression_str}{reset}")
+        print(f"{white}[{reset}💬{white}]{reset} {white}Processing text...{reset}")
+
+        start_time = time.time()
+
         # Default to encrypt if decrypt is not explicitly set
         if not args.decrypt:
-            Logger.log('info', "Encrypting text...")
+            Logger.log('info', "Encrypting text...", to_console=False)
             result = engine.encrypt_data(args.text.encode('utf-8'), args.password)
             b64_result = base64.b64encode(result).decode('utf-8')
             Logger.log('success', f"Encrypted (Base64): {b64_result}")
+            elapsed_time = time.time() - start_time
+            Logger.log('info', f"Output encrypted text length: {len(b64_result)} characters", to_console=False)
+            Logger.log('success', "Encryption completed successfully", to_console=False)
+            Logger.log('info', f"Operations completed: 1/1", to_console=False)
+            Logger.log('info', f"Total time: {elapsed_time:.2f}s", to_console=False)
+            print(f"{white}[{reset}✅{white}]{reset} {green}Encryption completed successfully{reset}")
+            print(f"{white}[{reset}✔️{white}]{reset} {blue}Operations completed: 1/1{reset}")
+            print(f"{white}[{reset}⏱️{white}]{reset} {blue}Total time: {elapsed_time:.2f}s{reset}")
         else:
-            Logger.log('info', "Decrypting text...")
+            Logger.log('info', "Decrypting text...", to_console=False)
             try:
                 Logger.log('debug', "Decoding Base64 text input")
                 raw_data = base64.b64decode(args.text)
                 result = engine.decrypt_data(raw_data, args.password)
                 if result:
                     Logger.log('success', f"Decrypted: {result.decode('utf-8')}")
+                    elapsed_time = time.time() - start_time
+                    Logger.log('info', f"Output decrypted text length: {len(result)} characters", to_console=False)
+                    Logger.log('success', "Decryption completed successfully", to_console=False)
+                    Logger.log('info', f"Operations completed: 1/1", to_console=False)
+                    Logger.log('info', f"Total time: {elapsed_time:.2f}s", to_console=False)
+                    print(f"{white}[{reset}✅{white}]{reset} {green}Decryption completed successfully{reset}")
+                    print(f"{white}[{reset}✔️{white}]{reset} {blue}Operations completed: 1/1{reset}")
+                    print(f"{white}[{reset}⏱️{white}]{reset} {blue}Total time: {elapsed_time:.2f}s{reset}")
             except Exception as e:
                 Logger.log('error', f"Failed: {e}")
+                Logger.log('error', "Operation failed: Decryption error")
 
     elif args.file:
         Logger.log('debug', f"File specified: {args.file}")
@@ -441,21 +521,43 @@ def main(argv=None):
         # Recursive Directory Processing
         if args.recursive and os.path.isdir(args.file):
             input_dir = args.file
+            white = TerminalColors.Foreground.WHITE
+            reset = TerminalColors.RESET
+            mode_str = "decrypt" if args.decrypt else "encrypt"
+            compression_str = "enabled" if args.compress else "disabled"
+            lock_emoji = "🔓" if args.decrypt else "🔐"
+            green = TerminalColors.Foreground.GREEN
+            yellow = TerminalColors.Foreground.YELLOW
+            blue = TerminalColors.Foreground.BLUE
+
             Logger.log('info', f"Processing directory: {input_dir}")
             Logger.log('debug', "Recursive mode enabled")
-            
+            Logger.log('info', f"Mode: {mode_str}", to_console=False)
+            Logger.log('info', f"Compression: {compression_str}", to_console=False)
+            Logger.log('info', f"Processing directory: {input_dir}", to_console=False)
+            Logger.log('info', "Recursive mode: enabled", to_console=False)
+            Logger.log('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {input_dir}", to_console=False)
+
+            # Display formatted status with emojis
+            print(f"{white}[{reset}{lock_emoji}{white}]{reset} {white}Mode: {mode_str}{reset}")
+            print(f"{white}[{reset}📦{white}]{reset} {white}Compression: {compression_str}{reset}")
+            print(f"{white}[{reset}📁{white}]{reset} {white}Processing directory: {input_dir}{reset}")
+            print(f"{white}[{reset}🔄{white}]{reset} {yellow}Recursive mode: enabled{reset}")
+
             success_count = 0
             fail_count = 0
-            
+            start_time = time.time()
+
             for root, dirs, files in os.walk(input_dir):
                 for file in files:
                     file_path = os.path.join(root, file)
-                    
+
                     if not args.decrypt:
                         # Skip already encrypted files if in crypt mode
                         if file.endswith('.enc'): continue
-                        
+
                         out_path = file_path + '.enc'
+                        Logger.log('info', f"Processing: {file_path}", to_console=False)
                         if engine.encrypt_file(file_path, out_path, args.password, args.compress):
                             success_count += 1
                         else:
@@ -463,36 +565,87 @@ def main(argv=None):
                     else:
                         # Decrypt mode: Only process .enc files (or whatever convention, here simplistic)
                         if not file.endswith('.enc'): continue
-                        
+
                         out_path = os.path.splitext(file_path)[0] # Strip .enc
                          # If extension was removed and no extension remains, might be an issue, but standard restore.
                         if os.path.splitext(file_path)[0] == file_path:
                              out_path = file_path + '.dec'
 
+                        Logger.log('info', f"Processing: {file_path}", to_console=False)
                         if engine.decrypt_file(file_path, out_path, args.password, args.compress):
                             success_count += 1
                         else:
                              fail_count += 1
-            
+
+            elapsed_time = time.time() - start_time
+            total_ops = success_count + fail_count
+
             Logger.log('info', f"Batch complete. Success: {success_count}, Failed: {fail_count}")
+            if fail_count > 0:
+                Logger.log('warning', f"Some files failed to process: {fail_count} failed")
+            Logger.log('info', f"Total files processed: {total_ops}", to_console=False)
+            Logger.log('info', f"Successful: {success_count}", to_console=False)
+            Logger.log('info', f"Failed: {fail_count}", to_console=False)
+
+            # Display completion summary with emojis
+            Logger.log('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", to_console=False)
+            Logger.log('info', f"Operations completed: {success_count}/{total_ops}", to_console=False)
+            Logger.log('info', f"Total time: {elapsed_time:.2f}s", to_console=False)
+            print(f"{white}[{reset}✅{white}]{reset} {green}{'Decryption' if args.decrypt else 'Encryption'} completed successfully{reset}")
+            print(f"{white}[{reset}✔️{white}]{reset} {blue}Operations completed: {success_count}/{total_ops}{reset}")
+            print(f"{white}[{reset}⏱️{white}]{reset} {blue}Total time: {elapsed_time:.2f}s{reset}")
 
         elif os.path.exists(args.file):
             if os.path.isdir(args.file):
                  Logger.log('error', f"Path is a directory. Use -r/--recursive to process directories.")
+                 Logger.log('error', "Operation aborted: Directory specified without --recursive flag")
                  sys.exit(1)
 
             default_ext = '.enc' if not args.decrypt else '.dec'
             output_file = args.output or (os.path.splitext(args.file)[0] + default_ext)
+
+            # Display formatted status with emojis
+            white = TerminalColors.Foreground.WHITE
+            reset = TerminalColors.RESET
+            mode_str = "decrypt" if args.decrypt else "encrypt"
+            compression_str = "enabled" if args.compress else "disabled"
+            lock_emoji = "🔓" if args.decrypt else "🔐"
+            green = TerminalColors.Foreground.GREEN
+            yellow = TerminalColors.Foreground.YELLOW
+            blue = TerminalColors.Foreground.BLUE
             
+            input_size = os.path.getsize(args.file)
+            Logger.log('info', f"Mode: {mode_str}", to_console=False)
+            Logger.log('info', f"Compression: {compression_str}", to_console=False)
+            Logger.log('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} file: {args.file} ({engine._format_size(input_size)})", to_console=False)
+            print(f"{white}[{reset}{lock_emoji}{white}]{reset} {white}Mode: {mode_str}{reset}")
+            print(f"{white}[{reset}📦{white}]{reset} {white}Compression: {compression_str}{reset}")
+            print(f"{white}[{reset}📄{white}]{reset} {white}Processing file: {args.file} ({engine._format_size(input_size)}){reset}")
+
+            start_time = time.time()
+
             if not args.decrypt:
                 success = engine.encrypt_file(args.file, output_file, args.password, args.compress)
             else:
                 success = engine.decrypt_file(args.file, output_file, args.password, args.compress)
-                
-            if not success:
+
+            elapsed_time = time.time() - start_time
+
+            if success:
+                # Display completion summary with emojis
+                Logger.log('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", to_console=False)
+                Logger.log('info', f"Operations completed: 1/1", to_console=False)
+                Logger.log('info', f"Total time: {elapsed_time:.2f}s", to_console=False)
+                print(f"{white}[{reset}✅{white}]{reset} {green}{'Decryption' if args.decrypt else 'Encryption'} completed successfully{reset}")
+                print(f"{white}[{reset}✔️{white}]{reset} {blue}Operations completed: 1/1{reset}")
+                print(f"{white}[{reset}⏱️{white}]{reset} {blue}Total time: {elapsed_time:.2f}s{reset}")
+            else:
+                Logger.log('error', f"{'Decryption' if args.decrypt else 'Encryption'} failed!")
                 sys.exit(1)
         else:
             Logger.log('error', f"File not found: {args.file}")
+            Logger.log('error', f"Operation failed: File does not exist")
+            Logger.log('error', "Please check the file path and try again")
             sys.exit(1)
 
 if __name__ == '__main__':
