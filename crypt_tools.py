@@ -13,6 +13,7 @@ import sys
 import time
 import zlib
 import getpass
+import io
 from enum import StrEnum
 from typing import Optional
 
@@ -23,6 +24,13 @@ try:
 except ImportError:
     print("Error: Missing dependencies. Please install 'pycryptodome' and 'tqdm'.")
     sys.exit(1)
+
+# Set stdout to UTF-8 to support emoji characters
+# Reconfigure stdout/stderr to use UTF-8 encoding
+if sys.stdout.encoding != 'utf-8':
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+if sys.stderr.encoding != 'utf-8':
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
 
 # =========================
 # Configuration
@@ -60,10 +68,9 @@ class TerminalColors:
         MAGENTA = '\033[95m'
         WHITE = '\033[97m'
 
-class OutputManager:
+class ConsoleLogger:
     """
-    Unified output manager for console and file logging.
-    Handles colored console output with emojis and timestamped log file writing.
+    Unified console and file logging with emojis and colors.
     All output goes through a single 'show' method.
     """
     DEBUG_ENABLED = False
@@ -83,7 +90,7 @@ class OutputManager:
     def show(level: str, message: str, icon: str = None, show_console: bool = True, log_file: bool = True) -> None:
         """
         Unified output method - writes to console and/or log file with emoji and colors.
-        
+
         Args:
             level: Output level ('info', 'success', 'error', 'warning', 'debug')
             message: Message to display/log
@@ -92,22 +99,22 @@ class OutputManager:
             log_file: If True and logging enabled, write to log file with emoji (default: True)
         """
         # Skip debug if not enabled
-        if level == 'debug' and not OutputManager.DEBUG_ENABLED:
+        if level == 'debug' and not ConsoleLogger.DEBUG_ENABLED:
             return
 
         # Get style for this level
-        style = OutputManager.STYLES.get(level, OutputManager.STYLES['info'])
+        style = ConsoleLogger.STYLES.get(level, ConsoleLogger.STYLES['info'])
         # Use custom icon if provided, otherwise use default from style
         used_icon = icon if icon is not None else style['icon']
         color = style['color']
 
         # Write to log file if enabled (with emoji)
-        if log_file and OutputManager.LOG_ENABLED:
-            OutputManager._write_to_file(level, used_icon, message)
+        if log_file and ConsoleLogger.LOG_ENABLED:
+            ConsoleLogger._write_to_file(level, used_icon, message)
 
         # Print to console if enabled (with emoji and colors)
         if show_console:
-            OutputManager._print_to_console(used_icon, message, color)
+            ConsoleLogger._print_to_console(used_icon, message, color)
 
     @staticmethod
     def _print_to_console(icon: str, message: str, color: TerminalColors.Foreground) -> None:
@@ -121,7 +128,7 @@ class OutputManager:
         """Write timestamped log entry to file with level and emoji."""
         timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
         log_entry = f"[{timestamp}] [{level.upper()}] [{icon}] {message}\n"
-        with open(OutputManager.LOG_FILE, 'a', encoding='utf-8') as f:
+        with open(ConsoleLogger.LOG_FILE, 'a', encoding='utf-8') as f:
             f.write(log_entry)
 
 class Banner:
@@ -200,7 +207,7 @@ class CryptoEngine:
 
     def _derive_key(self, password: str, salt: bytes) -> bytes:
         """Derive a 256-bit key from password and salt using PBKDF2."""
-        OutputManager.show('debug', f"Deriving key with PBKDF2 ({Config.PBKDF2_ITERATIONS} iterations)")
+        ConsoleLogger.show('debug', f"Deriving key with PBKDF2 ({Config.PBKDF2_ITERATIONS} iterations)")
         return hashlib.pbkdf2_hmac(
             'sha256', 
             password.encode('utf-8'), 
@@ -222,16 +229,16 @@ class CryptoEngine:
         Encrypt bytes in memory.
         Format: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
         """
-        OutputManager.show('debug', f"Starting in-memory data encryption ({len(data)} bytes input)")
+        ConsoleLogger.show('debug', f"Starting in-memory data encryption ({len(data)} bytes input)")
         salt = os.urandom(Config.SALT_SIZE)
         nonce = os.urandom(Config.NONCE_SIZE)
-        OutputManager.show('debug', f"Generated salt ({Config.SALT_SIZE} bytes) and nonce ({Config.NONCE_SIZE} bytes)")
+        ConsoleLogger.show('debug', f"Generated salt ({Config.SALT_SIZE} bytes) and nonce ({Config.NONCE_SIZE} bytes)")
         key = self._derive_key(password, salt)
         
-        OutputManager.show('debug', "Initializing AES-GCM cipher")
+        ConsoleLogger.show('debug', "Initializing AES-GCM cipher")
         cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
         ciphertext, tag = cipher.encrypt_and_digest(data)
-        OutputManager.show('debug', f"Encryption complete. Ciphertext size: {len(ciphertext)} bytes, Tag size: {len(tag)} bytes")
+        ConsoleLogger.show('debug', f"Encryption complete. Ciphertext size: {len(ciphertext)} bytes, Tag size: {len(tag)} bytes")
         
         return salt + nonce + tag + ciphertext
 
@@ -241,29 +248,29 @@ class CryptoEngine:
         Expects: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
         """
         try:
-            OutputManager.show('debug', f"Starting in-memory data decryption. Total input size: {len(enc_data)} bytes")
+            ConsoleLogger.show('debug', f"Starting in-memory data decryption. Total input size: {len(enc_data)} bytes")
             overhead = Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
             if len(enc_data) < overhead:
-                OutputManager.show('debug', "Input data is smaller than minimum overhead")
+                ConsoleLogger.show('debug', "Input data is smaller than minimum overhead")
                 raise ValueError("Data too short")
 
             salt = enc_data[:Config.SALT_SIZE]
             nonce = enc_data[Config.SALT_SIZE : Config.SALT_SIZE + Config.NONCE_SIZE]
             tag = enc_data[Config.SALT_SIZE + Config.NONCE_SIZE : overhead]
             ciphertext = enc_data[overhead:]
-            OutputManager.show('debug', f"Extracted salt, nonce, tag, and ciphertext ({len(ciphertext)} bytes)")
+            ConsoleLogger.show('debug', f"Extracted salt, nonce, tag, and ciphertext ({len(ciphertext)} bytes)")
 
             key = self._derive_key(password, salt)
-            OutputManager.show('debug', "Initializing AES-GCM cipher for decryption")
+            ConsoleLogger.show('debug', "Initializing AES-GCM cipher for decryption")
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
             
-            OutputManager.show('debug', "Verifying tag and decrypting ciphertext")
+            ConsoleLogger.show('debug', "Verifying tag and decrypting ciphertext")
             decrypted = cipher.decrypt_and_verify(ciphertext, tag)
-            OutputManager.show('debug', f"Decryption successful. Plaintext size: {len(decrypted)} bytes")
+            ConsoleLogger.show('debug', f"Decryption successful. Plaintext size: {len(decrypted)} bytes")
             return decrypted
             
         except (ValueError, KeyError) as e:
-            OutputManager.show('error', f"Decryption failed: {str(e)}")
+            ConsoleLogger.show('error', f"Decryption failed: {str(e)}")
             return None
 
     def encrypt_file(self, input_path: str, output_path: str, password: str, compress: bool = False) -> bool:
@@ -272,14 +279,14 @@ class CryptoEngine:
         Format: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
         """
         try:
-            OutputManager.show('debug', f"Starting file encryption: {input_path} -> {output_path}")
+            ConsoleLogger.show('debug', f"Starting file encryption: {input_path} -> {output_path}")
             file_size = os.path.getsize(input_path)
             
-            OutputManager.show('debug', f"Generating {Config.SALT_SIZE} bytes salt and {Config.NONCE_SIZE} bytes nonce")
+            ConsoleLogger.show('debug', f"Generating {Config.SALT_SIZE} bytes salt and {Config.NONCE_SIZE} bytes nonce")
             salt = os.urandom(Config.SALT_SIZE)
             nonce = os.urandom(Config.NONCE_SIZE)
             key = self._derive_key(password, salt)
-            OutputManager.show('debug', "Initializing AES-GCM cipher")
+            ConsoleLogger.show('debug', "Initializing AES-GCM cipher")
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
 
             with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
@@ -289,7 +296,7 @@ class CryptoEngine:
                 
                 compressor = zlib.compressobj(level=9) if compress else None
                 if compress:
-                    OutputManager.show('debug', "Compression enabled (zlib level 9)")
+                    ConsoleLogger.show('debug', "Compression enabled (zlib level 9)")
                 
                 with tqdm(total=file_size, unit='B', unit_scale=True, desc="[🔒] Encrypting") as pbar:
                     while True:
@@ -306,26 +313,26 @@ class CryptoEngine:
                         
                         pbar.update(len(chunk))
                 
-                OutputManager.show('debug', "Reached end of input file")
+                ConsoleLogger.show('debug', "Reached end of input file")
                 
                 if compressor:
                     remaining = compressor.flush()
                     if remaining:
-                        OutputManager.show('debug', f"Writing remaining compressed data ({len(remaining)} bytes)")
+                        ConsoleLogger.show('debug', f"Writing remaining compressed data ({len(remaining)} bytes)")
                         fout.write(cipher.encrypt(remaining))
                 
                 # Calculate and write Tag at the end
                 tag = cipher.digest()
-                OutputManager.show('debug', f"Writing authentication tag ({len(tag)} bytes)")
+                ConsoleLogger.show('debug', f"Writing authentication tag ({len(tag)} bytes)")
                 fout.write(tag)
 
             # Log encryption progress completion
-            OutputManager.show('info', f"Encrypting: {file_size}B encrypted successfully", icon='🔒')
+            ConsoleLogger.show('info', f"Encrypting: {file_size}B encrypted successfully", icon='🔒')
             return True
 
         except Exception as e:
-            OutputManager.show('error', f"File encryption error: {e}")
-            OutputManager.show('error', f"Failed to encrypt: {input_path}")
+            ConsoleLogger.show('error', f"File encryption error: {e}")
+            ConsoleLogger.show('error', f"Failed to encrypt: {input_path}")
             if os.path.exists(output_path):
                 os.remove(output_path)
             return False
@@ -337,76 +344,76 @@ class CryptoEngine:
         """
         try:
             file_size = os.path.getsize(input_path)
-            OutputManager.show('debug', f"Starting file decryption: {input_path} (size: {self._format_size(file_size)}) -> {output_path}")
+            ConsoleLogger.show('debug', f"Starting file decryption: {input_path} (size: {self._format_size(file_size)}) -> {output_path}")
             header_size = Config.SALT_SIZE + Config.NONCE_SIZE
             footer_size = Config.TAG_SIZE
             
             if file_size < header_size + footer_size:
-                OutputManager.show('debug', "File size is smaller than required header + footer overhead")
+                ConsoleLogger.show('debug', "File size is smaller than required header + footer overhead")
                 raise ValueError("File too small")
 
             with open(input_path, 'rb') as fin:
                 salt = fin.read(Config.SALT_SIZE)
                 nonce = fin.read(Config.NONCE_SIZE)
                 
-                OutputManager.show('debug', f"Read salt ({len(salt)} bytes) and nonce ({len(nonce)} bytes)")
+                ConsoleLogger.show('debug', f"Read salt ({len(salt)} bytes) and nonce ({len(nonce)} bytes)")
                 key = self._derive_key(password, salt)
-                OutputManager.show('debug', "Initializing AES-GCM cipher for decryption")
+                ConsoleLogger.show('debug', "Initializing AES-GCM cipher for decryption")
                 cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
                 
                 ciphertext_len = file_size - header_size - footer_size
-                OutputManager.show('debug', f"Ciphertext length to decrypt: {self._format_size(ciphertext_len)}")
+                ConsoleLogger.show('debug', f"Ciphertext length to decrypt: {self._format_size(ciphertext_len)}")
                 
                 with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc="[🔓] Decrypting") as pbar:
                     decompressor = zlib.decompressobj() if compress else None
                     bytes_read = 0
-                    
+
                     while bytes_read < ciphertext_len:
                         read_size = min(Config.CHUNK_SIZE, ciphertext_len - bytes_read)
                         chunk = fin.read(read_size)
                         if not chunk:
                             break
-                        
+
                         decrypted_chunk = cipher.decrypt(chunk)
-                        
+
                         if decompressor:
                             decompressed_chunk = decompressor.decompress(decrypted_chunk)
                             if decompressed_chunk:
                                 fout.write(decompressed_chunk)
                         else:
                             fout.write(decrypted_chunk)
-                            
+
                         bytes_read += len(chunk)
                         pbar.update(len(chunk))
 
                 if bytes_read < ciphertext_len:
-                    OutputManager.show('warning', "Unexpected end of file while reading ciphertext")
+                    ConsoleLogger.show('warning', "Unexpected end of file while reading ciphertext")
 
                     if decompressor:
-                        OutputManager.show('debug', "Flushing decompressor buffers")
+                        ConsoleLogger.show('debug', "Flushing decompressor buffers")
                         fout.write(decompressor.flush())
 
-                    # Verify Tag
-                    tag = fin.read(Config.TAG_SIZE)
-                    OutputManager.show('debug', f"Read authentication tag ({len(tag)} bytes)")
-                    try:
-                        OutputManager.show('debug', "Verifying authentication tag")
-                        cipher.verify(tag)
-                    except ValueError:
-                        OutputManager.show('error', "INTEGRITY CHECK FAILED! Password wrong or file corrupted.")
-                        OutputManager.show('error', f"Decryption failed for: {input_path}")
-                        fout.close()
-                        os.remove(output_path)
-                        return False
+                # Verify Tag (always, regardless of bytes_read)
+                tag = fin.read(Config.TAG_SIZE)
+                ConsoleLogger.show('debug', f"Read authentication tag ({len(tag)} bytes)")
+                try:
+                    ConsoleLogger.show('debug', "Verifying authentication tag")
+                    cipher.verify(tag)
+                except ValueError:
+                    ConsoleLogger.show('error', "INTEGRITY CHECK FAILED! Password wrong or file corrupted.")
+                    ConsoleLogger.show('error', f"Decryption failed for: {input_path}")
+                    fout.close()
+                    os.remove(output_path)
+                    return False
 
-            OutputManager.show('success', "Integrity Verified. Decryption successful.")
+            ConsoleLogger.show('success', "Integrity Verified. Decryption successful.")
             # Log decryption progress completion
-            OutputManager.show('info', f"Decrypting: {file_size}B decrypted successfully", icon='🔓')
+            ConsoleLogger.show('info', f"Decrypting: {file_size}B decrypted successfully", icon='🔓')
             return True
 
         except Exception as e:
-            OutputManager.show('error', f"File decryption error: {e}")
-            OutputManager.show('error', f"Failed to decrypt: {input_path}")
+            ConsoleLogger.show('error', f"File decryption error: {e}")
+            ConsoleLogger.show('error', f"Failed to decrypt: {input_path}")
             if os.path.exists(output_path):
                 try: os.remove(output_path)
                 except: pass
@@ -445,42 +452,42 @@ def main(argv=None):
 
     # Enable logging FIRST if --log flag is set
     if args.log:
-        OutputManager.LOG_ENABLED = True
+        ConsoleLogger.LOG_ENABLED = True
 
     # Enable debug mode if --debug flag is set
     if args.debug:
-        OutputManager.DEBUG_ENABLED = True
-        OutputManager.show('debug', "Debug Mode Enabled. Verbose logging activated.")
-        OutputManager.show('info', "Debug mode: Enabled")
+        ConsoleLogger.DEBUG_ENABLED = True
+        ConsoleLogger.show('debug', "Debug Mode Enabled. Verbose logging activated.")
+        ConsoleLogger.show('info', "Debug mode: Enabled")
 
     # Show log file info (after LOG_ENABLED is set)
     if args.log:
-        OutputManager.show('debug', f"Logging enabled. Writing to: {OutputManager.LOG_FILE}")
-        OutputManager.show('info', f"Log file: {OutputManager.LOG_FILE}")
-        OutputManager.show('info', "Logging to file: Enabled")
+        ConsoleLogger.show('debug', f"Logging enabled. Writing to: {ConsoleLogger.LOG_FILE}")
+        ConsoleLogger.show('info', f"Log file: {ConsoleLogger.LOG_FILE}")
+        ConsoleLogger.show('info', "Logging to file: Enabled")
 
     # Secure Password Input
     if not args.password:
-        OutputManager.show('info', "Enter Password: ", icon='🔑', log_file=False)
+        ConsoleLogger.show('info', "Enter Password: ", icon='🔑', log_file=False)
         args.password = getpass.getpass()
-        OutputManager.show('info', "Password entered by user", icon='🔑')
+        ConsoleLogger.show('info', "Password entered by user", icon='🔑')
         if not args.password:
-             OutputManager.show('error', "Password cannot be empty.")
-             OutputManager.show('error', "Operation aborted: No password provided")
+             ConsoleLogger.show('error', "Password cannot be empty.")
+             ConsoleLogger.show('error', "Operation aborted: No password provided")
              sys.exit(1)
 
         # Verify password if encrypting
         if not args.decrypt:
-            OutputManager.show('debug', "Prompting for verification password")
-            OutputManager.show('info', "Verify Password: ", icon='🔄', log_file=False)
+            ConsoleLogger.show('debug', "Prompting for verification password")
+            ConsoleLogger.show('info', "Verify Password: ", icon='🔄', log_file=False)
             verify_pass = getpass.getpass()
-            OutputManager.show('info', "Password verification entered", icon='🔄')
+            ConsoleLogger.show('info', "Password verification entered", icon='🔄')
             if args.password != verify_pass:
-                OutputManager.show('error', "Passwords do not match!")
-                OutputManager.show('error', "Operation aborted due to password mismatch")
+                ConsoleLogger.show('error', "Passwords do not match!")
+                ConsoleLogger.show('error', "Operation aborted due to password mismatch")
                 sys.exit(1)
     else:
-        OutputManager.show('debug', "Password provided via command line")
+        ConsoleLogger.show('debug', "Password provided via command line")
 
     if args.text:
         # Display formatted status with emojis for text mode
@@ -490,43 +497,43 @@ def main(argv=None):
         green = TerminalColors.Foreground.GREEN
         blue = TerminalColors.Foreground.BLUE
 
-        OutputManager.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
-        OutputManager.show('info', f"Compression: {compression_str}", icon='📦')
-        OutputManager.show('info', "Processing text...", icon='💬')
-        OutputManager.show('info', f"Input text length: {len(args.text)} characters", log_file=False)
+        ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
+        ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
+        ConsoleLogger.show('info', "Processing text...", icon='💬')
+        ConsoleLogger.show('info', f"Input text length: {len(args.text)} characters", log_file=False)
 
         start_time = time.time()
 
         # Default to encrypt if decrypt is not explicitly set
         if not args.decrypt:
-            OutputManager.show('info', "Encrypting text...")
+            ConsoleLogger.show('info', "Encrypting text...")
             result = engine.encrypt_data(args.text.encode('utf-8'), args.password)
             b64_result = base64.b64encode(result).decode('utf-8')
-            OutputManager.show('success', f"Encrypted (Base64): {b64_result}")
+            ConsoleLogger.show('success', f"Encrypted (Base64): {b64_result}")
             elapsed_time = time.time() - start_time
-            OutputManager.show('info', f"Output encrypted text length: {len(b64_result)} characters")
-            OutputManager.show('success', "Encryption completed successfully", icon='✅')
-            OutputManager.show('info', f"Operations completed: 1/1", icon='✔️')
-            OutputManager.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
+            ConsoleLogger.show('info', f"Output encrypted text length: {len(b64_result)} characters")
+            ConsoleLogger.show('success', "Encryption completed successfully", icon='✅')
+            ConsoleLogger.show('info', f"Operations completed: 1/1", icon='✔️')
+            ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
         else:
-            OutputManager.show('info', "Decrypting text...")
+            ConsoleLogger.show('info', "Decrypting text...")
             try:
-                OutputManager.show('debug', "Decoding Base64 text input")
+                ConsoleLogger.show('debug', "Decoding Base64 text input")
                 raw_data = base64.b64decode(args.text)
                 result = engine.decrypt_data(raw_data, args.password)
                 if result:
-                    OutputManager.show('success', f"Decrypted: {result.decode('utf-8')}", log_file=False)
+                    ConsoleLogger.show('success', f"Decrypted: {result.decode('utf-8')}", log_file=False)
                     elapsed_time = time.time() - start_time
-                    OutputManager.show('info', f"Output decrypted text length: {len(result)} characters", log_file=False)
-                    OutputManager.show('success', "Decryption completed successfully", icon='✅')
-                    OutputManager.show('info', f"Operations completed: 1/1", icon='✔️')
-                    OutputManager.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
+                    ConsoleLogger.show('info', f"Output decrypted text length: {len(result)} characters", log_file=False)
+                    ConsoleLogger.show('success', "Decryption completed successfully", icon='✅')
+                    ConsoleLogger.show('info', f"Operations completed: 1/1", icon='✔️')
+                    ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
             except Exception as e:
-                OutputManager.show('error', f"Failed: {e}")
-                OutputManager.show('error', "Operation failed: Decryption error")
+                ConsoleLogger.show('error', f"Failed: {e}")
+                ConsoleLogger.show('error', "Operation failed: Decryption error")
 
     elif args.file:
-        OutputManager.show('debug', f"File specified: {args.file}")
+        ConsoleLogger.show('debug', f"File specified: {args.file}")
 
         # Recursive Directory Processing
         if args.recursive and os.path.isdir(args.file):
@@ -538,12 +545,12 @@ def main(argv=None):
             yellow = TerminalColors.Foreground.YELLOW
             blue = TerminalColors.Foreground.BLUE
 
-            OutputManager.show('info', f"Processing directory: {input_dir}", icon='📁')
-            OutputManager.show('debug', "Recursive mode enabled")
-            OutputManager.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
-            OutputManager.show('info', f"Compression: {compression_str}", icon='📦')
-            OutputManager.show('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {input_dir}", icon='🔒' if not args.decrypt else '🔓')
-            OutputManager.show('info', "Recursive mode: enabled", icon='🔄')
+            ConsoleLogger.show('info', f"Processing directory: {input_dir}", icon='📁')
+            ConsoleLogger.show('debug', "Recursive mode enabled")
+            ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
+            ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
+            ConsoleLogger.show('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {input_dir}", icon='🔒' if not args.decrypt else '🔓')
+            ConsoleLogger.show('info', "Recursive mode: enabled", icon='🔄')
 
             success_count = 0
             fail_count = 0
@@ -558,7 +565,7 @@ def main(argv=None):
                         if file.endswith('.enc'): continue
 
                         out_path = file_path + '.enc'
-                        OutputManager.show('info', f"Processing: {file_path}", icon='📄')
+                        ConsoleLogger.show('info', f"Processing: {file_path}", icon='📄')
                         if engine.encrypt_file(file_path, out_path, args.password, args.compress):
                             success_count += 1
                         else:
@@ -572,7 +579,7 @@ def main(argv=None):
                         if os.path.splitext(file_path)[0] == file_path:
                              out_path = file_path + '.dec'
 
-                        OutputManager.show('info', f"Processing: {file_path}", icon='📄')
+                        ConsoleLogger.show('info', f"Processing: {file_path}", icon='📄')
                         if engine.decrypt_file(file_path, out_path, args.password, args.compress):
                             success_count += 1
                         else:
@@ -581,22 +588,22 @@ def main(argv=None):
             elapsed_time = time.time() - start_time
             total_ops = success_count + fail_count
 
-            OutputManager.show('info', f"Batch complete. Success: {success_count}, Failed: {fail_count}")
+            ConsoleLogger.show('info', f"Batch complete. Success: {success_count}, Failed: {fail_count}")
             if fail_count > 0:
-                OutputManager.show('warning', f"Some files failed to process: {fail_count} failed")
-            OutputManager.show('info', f"Total files processed: {total_ops}")
-            OutputManager.show('info', f"Successful: {success_count}")
-            OutputManager.show('info', f"Failed: {fail_count}")
+                ConsoleLogger.show('warning', f"Some files failed to process: {fail_count} failed")
+            ConsoleLogger.show('info', f"Total files processed: {total_ops}")
+            ConsoleLogger.show('info', f"Successful: {success_count}")
+            ConsoleLogger.show('info', f"Failed: {fail_count}")
 
             # Display completion summary
-            OutputManager.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
-            OutputManager.show('info', f"Operations completed: {success_count}/{total_ops}", icon='✔️')
-            OutputManager.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
+            ConsoleLogger.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
+            ConsoleLogger.show('info', f"Operations completed: {success_count}/{total_ops}", icon='✔️')
+            ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
 
         elif os.path.exists(args.file):
             if os.path.isdir(args.file):
-                 OutputManager.show('error', f"Path is a directory. Use -r/--recursive to process directories.")
-                 OutputManager.show('error', "Operation aborted: Directory specified without --recursive flag")
+                 ConsoleLogger.show('error', f"Path is a directory. Use -r/--recursive to process directories.")
+                 ConsoleLogger.show('error', "Operation aborted: Directory specified without --recursive flag")
                  sys.exit(1)
 
             default_ext = '.enc' if not args.decrypt else '.dec'
@@ -610,9 +617,9 @@ def main(argv=None):
             blue = TerminalColors.Foreground.BLUE
 
             input_size = os.path.getsize(args.file)
-            OutputManager.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
-            OutputManager.show('info', f"Compression: {compression_str}", icon='📦')
-            OutputManager.show('info', f"Processing file: {args.file} ({engine._format_size(input_size)})", icon='📄')
+            ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
+            ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
+            ConsoleLogger.show('info', f"Processing file: {args.file} ({engine._format_size(input_size)})", icon='📄')
 
             start_time = time.time()
 
@@ -625,17 +632,17 @@ def main(argv=None):
 
             if success:
                 # Display completion summary
-                OutputManager.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
-                OutputManager.show('success', f"File {'encrypted' if not args.decrypt else 'decrypted'}: {output_file} ({engine._format_size(os.path.getsize(output_file))})", icon='📄')
-                OutputManager.show('info', "Operations completed: 1/1", icon='✔️')
-                OutputManager.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
+                ConsoleLogger.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
+                ConsoleLogger.show('success', f"File {'encrypted' if not args.decrypt else 'decrypted'}: {output_file} ({engine._format_size(os.path.getsize(output_file))})", icon='📄')
+                ConsoleLogger.show('info', "Operations completed: 1/1", icon='✔️')
+                ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
             else:
-                OutputManager.show('error', f"{'Decryption' if args.decrypt else 'Encryption'} failed!")
+                ConsoleLogger.show('error', f"{'Decryption' if args.decrypt else 'Encryption'} failed!")
                 sys.exit(1)
         else:
-            OutputManager.show('error', f"File not found: {args.file}")
-            OutputManager.show('error', f"Operation failed: File does not exist")
-            OutputManager.show('error', "Please check the file path and try again")
+            ConsoleLogger.show('error', f"File not found: {args.file}")
+            ConsoleLogger.show('error', f"Operation failed: File does not exist")
+            ConsoleLogger.show('error', "Please check the file path and try again")
             sys.exit(1)
 
 if __name__ == '__main__':
