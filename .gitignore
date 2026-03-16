@@ -182,3 +182,7 @@ __pycache__/
 .vscode/
 tests/__pycache__/
 __init__.py.bak
+
+# encrypted files
+*.enc
+*.dec
