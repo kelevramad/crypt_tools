@@ -25,12 +25,14 @@ except ImportError:
     print("Error: Missing dependencies. Please install 'pycryptodome' and 'tqdm'.")
     sys.exit(1)
 
-# Set stdout to UTF-8 to support emoji characters
-# Reconfigure stdout/stderr to use UTF-8 encoding
-if sys.stdout.encoding != 'utf-8':
-    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
-if sys.stderr.encoding != 'utf-8':
-    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+# Reconfigure stdout/stderr to use UTF-8 encoding (supports emojis)
+def ensure_utf8(stream):
+    if stream.encoding != 'utf-8':
+        return io.TextIOWrapper(stream.buffer, encoding='utf-8', errors='replace')
+    return stream
+
+sys.stdout = ensure_utf8(sys.stdout)
+sys.stderr = ensure_utf8(sys.stderr)
 
 # =========================
 # Configuration
@@ -40,7 +42,7 @@ class Config:
     """Configuration constants."""
     AUTHOR = 'Center For Cyber Intelligence'
     DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-    VERSION = "2.0.0"
+    VERSION = "2.1.0"
     
     # AES-GCM Constants
     KEY_SIZE = 32           # 256 bits
