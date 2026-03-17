@@ -108,7 +108,7 @@ uv run crypt_tools.py --decrypt -i ./my_folder -r
 
 ## Technical Details
 
-### Version 2.0.0 Specifications
+### Version 2.1.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -210,4 +210,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.0.0
+**Version**: 2.1.0

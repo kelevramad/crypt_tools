@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.0.0 |
+| **Version** | 2.1.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ |
@@ -199,7 +199,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Limitation | Details |
 |------------|---------|
-| **Version Compatibility** | v2.0.0 not compatible with v1.x (MD5-based) |
+| **Version Compatibility** | v2.1.0 not compatible with v1.x (MD5-based) |
 | **File Extension** | Encrypted files use `.enc` by default; decrypted files use `.dec` |
 | **Interactive Mode** | Requires terminal for password prompts |
 | **Memory** | Chunk-based but requires ~64KB buffer |
@@ -223,6 +223,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.1.0 | 2026-03-16 | Minor version update, encoding fixes |
 | 2.0.0 | 2026 | AES-GCM, PBKDF2, streaming, compression, OutputManager, file logging |
 | 1.x | — | Legacy MD5-based (deprecated) |
 
