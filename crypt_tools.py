@@ -329,7 +329,7 @@ class CryptoEngine:
                 fout.write(tag)
 
             # Log encryption progress completion
-            ConsoleLogger.show('info', f"Encrypting: {file_size}B encrypted successfully", icon='🔒')
+            ConsoleLogger.show('info', f"Encrypting: {self._format_size(file_size)} encrypted successfully", icon='🔒')
             return True
 
         except Exception as e:
@@ -410,7 +410,7 @@ class CryptoEngine:
 
             ConsoleLogger.show('success', "Integrity Verified. Decryption successful.")
             # Log decryption progress completion
-            ConsoleLogger.show('info', f"Decrypting: {file_size}B decrypted successfully", icon='🔓')
+            ConsoleLogger.show('info', f"Decrypting: {self._format_size(file_size)} decrypted successfully", icon='🔓')
             return True
 
         except Exception as e:
@@ -455,6 +455,10 @@ def main(argv=None):
     # Enable logging FIRST if --log flag is set
     if args.log:
         ConsoleLogger.LOG_ENABLED = True
+
+    # Record start time
+    start_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    ConsoleLogger.show('info', f"Session started at {start_timestamp}", icon='🕐')
 
     # Enable debug mode if --debug flag is set
     if args.debug:
@@ -570,6 +574,7 @@ def main(argv=None):
                         ConsoleLogger.show('info', f"Processing: {file_path}", icon='📄')
                         if engine.encrypt_file(file_path, out_path, args.password, args.compress):
                             success_count += 1
+                            ConsoleLogger.show('success', f"File encrypted: {out_path} ({engine._format_size(os.path.getsize(out_path))})", icon='📄')
                         else:
                             fail_count += 1
                     else:
@@ -584,6 +589,7 @@ def main(argv=None):
                         ConsoleLogger.show('info', f"Processing: {file_path}", icon='📄')
                         if engine.decrypt_file(file_path, out_path, args.password, args.compress):
                             success_count += 1
+                            ConsoleLogger.show('success', f"File decrypted: {out_path} ({engine._format_size(os.path.getsize(out_path))})", icon='📄')
                         else:
                              fail_count += 1
 
@@ -646,6 +652,14 @@ def main(argv=None):
             ConsoleLogger.show('error', f"Operation failed: File does not exist")
             ConsoleLogger.show('error', "Please check the file path and try again")
             sys.exit(1)
+
+    # Record end time
+    end_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+    ConsoleLogger.show('info', f"Session ended at {end_timestamp}", icon='🏁')
+
+    # Write separator line and end timestamp to log file at the end of session
+    if ConsoleLogger.LOG_ENABLED:
+        ConsoleLogger.show('info', "="*80, show_console=False, log_file=True)
 
 if __name__ == '__main__':
     main()
