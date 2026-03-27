@@ -5,10 +5,10 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.1.0 |
+| **Version** | 2.2.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
-| **Language** | Python 3.13+ |
+| **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
 | **Author** | Center For Cyber Intelligence |
 | **License** | Proprietary |
 
@@ -16,7 +16,7 @@
 
 ## 2. Product Overview
 
-**Crypt Tools** is a secure command-line utility for encrypting and decrypting files and text using industry-standard AES-256-GCM authenticated encryption. It features PBKDF2-HMAC-SHA256 key derivation, streamed processing for large files, optional compression, and an intuitive CLI with visual feedback.
+**Crypt Tools** is a secure command-line utility for encrypting and decrypting files and text using industry-standard AES-256-GCM authenticated encryption. It features PBKDF2-HMAC-SHA256 key derivation, streamed processing for large files, optional compression, a versioned `CT02` encrypted file format, and an intuitive CLI with visual feedback.
 
 ### 2.1 Purpose
 Provide users with a lightweight, secure, and efficient tool for protecting sensitive data at rest through encryption.
@@ -39,10 +39,14 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **PBKDF2 Key Derivation** | 100,000 iterations with HMAC-SHA256 and random 16-byte salt |
 | **Streamed File Processing** | 64KB chunk-based processing for minimal memory footprint |
 | **Optional Compression** | Zlib compression (level 9) before encryption |
+| **Versioned File Format** | `CT02` header with embedded flags and KDF parameters |
 | **Text Encryption** | Encrypt/decrypt strings directly from CLI |
 | **File Encryption** | Encrypt/decrypt individual files |
+| **Inspect Mode** | View encrypted file metadata without decrypting |
 | **Recursive Directory Processing** | Batch encrypt/decrypt entire directory trees |
+| **File Pattern Expansion** | Encrypt/decrypt file groups via wildcards (e.g., `*.md`, `crypt*.*`) |
 | **Secure Password Handling** | Interactive prompts with verification (encrypt mode) |
+| **Password Strength Indicator** | Live strength and character-class feedback during input |
 | **Visual Feedback** | Progress bars, color-coded logs with emojis, ASCII banners |
 | **File Logging** | Optional timestamped log file for audit trail |
 
@@ -66,15 +70,17 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 
 **File Format:**
 ```
-[Salt: 16 bytes] + [Nonce: 12 bytes] + [Ciphertext: variable] + [GCM Tag: 16 bytes]
+[Magic: 4 bytes] + [Version: 1 byte] + [Flags: 1 byte] + [KDF ID: 1 byte] + [Reserved: 1 byte] +
+[Salt Length: 1 byte] + [Nonce Length: 1 byte] + [Tag Length: 1 byte] + [KDF Param Length: 1 byte] +
+[KDF Params: variable] + [Salt: 16 bytes] + [Nonce: 12 bytes] + [Ciphertext: variable] + [GCM Tag: 16 bytes]
 ```
 
 **In-Memory Format:**
 ```
-[Salt: 16 bytes] + [Nonce: 12 bytes] + [GCM Tag: 16 bytes] + [Ciphertext]
+[Header] + [Salt: 16 bytes] + [Nonce: 12 bytes] + [Ciphertext] + [GCM Tag: 16 bytes]
 ```
 
-**Total Overhead:** 44 bytes per encrypted file
+**Current Overhead (PBKDF2 / CT02):** 60 bytes per encrypted file
 
 ### 4.2 Architecture
 
@@ -114,12 +120,13 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 |----------|-------|-------------|---------|
 | `--encrypt` | `-e` | Encrypt mode | Yes (default) |
 | `--decrypt` | `-d` | Decrypt mode | No |
+| `--inspect` | — | Inspect encrypted file metadata | No |
 | `--text` | `-t` | Text to process | None |
-| `--input` | `-i` | Input file/directory path | Required |
+| `--file` | `-f` | Input file/directory path or wildcard pattern (e.g., `*.md`, `tests\\*.pyc`) | Required |
 | `--output` | `-o` | Output file path | Auto-generated |
 | `--password` | `-p` | Password | Interactive prompt |
 | `--compress` | `-c` | Enable zlib compression | Disabled |
-| `--recursive` | `-r` | Process directories recursively | Disabled |
+| `--recursive` | `-r` | Process directories or wildcard patterns recursively | Disabled |
 | `--log` | — | Enable file logging to `crypt_tools.log` | Disabled |
 | `--debug` | — | Enable debug logging | Disabled |
 | `--version` | `-v` | Show version | — |
@@ -134,19 +141,28 @@ uv run crypt_tools.py --encrypt -t "Secret Message" -p "password"
 uv run crypt_tools.py --decrypt -t "base64_encrypted_string" -p "password"
 
 # Encrypt file (interactive password)
-uv run crypt_tools.py --encrypt -i document.txt
+uv run crypt_tools.py --encrypt -f document.txt
 
 # Encrypt file with compression
-uv run crypt_tools.py --encrypt -i document.txt -p "password" -c
+uv run crypt_tools.py --encrypt -f document.txt -p "password" -c
 
 # Encrypt directory recursively
-uv run crypt_tools.py --encrypt -i ./my_folder -r -p "password"
+uv run crypt_tools.py --encrypt -f ./my_folder -r -p "password"
 
 # Decrypt directory recursively
-uv run crypt_tools.py --decrypt -i ./my_folder -r -p "password"
+uv run crypt_tools.py --decrypt -f ./my_folder -r -p "password"
+
+# Inspect encrypted file metadata
+uv run crypt_tools.py --inspect -f document.enc
 
 # Enable file logging
-uv run crypt_tools.py --encrypt -i document.txt -p "password" --log
+uv run crypt_tools.py --encrypt -f document.txt -p "password" --log
+
+# Encrypt a group of files by pattern
+uv run crypt_tools.py --encrypt -f "*.md" -p "password"
+
+# Recursive wildcard inside a directory
+uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "password"
 ```
 
 ---
@@ -189,6 +205,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 | **Wrong Password** | Decryption fails, output file deleted |
 | **Tampered File** | GCM verification fails, integrity error |
 | **File Too Small** | ValueError raised, graceful exit |
+| **Legacy Compressed File** | May require `--compress` during decryption |
 | **Missing Input** | Error logged, exit code 1 |
 | **Password Empty** | Error logged, exit code 1 |
 | **Password Mismatch** | Verification fails, exit code 1 |
@@ -199,8 +216,9 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Limitation | Details |
 |------------|---------|
-| **Version Compatibility** | v2.1.0 not compatible with v1.x (MD5-based) |
+| **Version Compatibility** | v2.2.0 reads `CT02` and legacy v2.1 files; still not compatible with v1.x (MD5-based) |
 | **File Extension** | Encrypted files use `.enc` by default; decrypted files use `.dec` |
+| **Output Override** | `--output` applies only to single-file operations |
 | **Interactive Mode** | Requires terminal for password prompts |
 | **Memory** | Chunk-based but requires ~64KB buffer |
 | **Log File** | Log file accumulates entries; manual cleanup required |
@@ -223,6 +241,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.2.0 | 2026-03-26 | Added `CT02` format header, inspect mode, and automatic compression detection for new files |
 | 2.1.0 | 2026-03-16 | Minor version update, encoding fixes |
 | 2.0.0 | 2026 | AES-GCM, PBKDF2, streaming, compression, OutputManager, file logging |
 | 1.x | — | Legacy MD5-based (deprecated) |
@@ -248,5 +267,5 @@ crypt_tools/
 
 ---
 
-**Document Version:** 1.1
-**Last Updated:** March 16, 2026
+**Document Version:** 1.2
+**Last Updated:** March 26, 2026

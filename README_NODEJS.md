@@ -1,7 +1,7 @@
-# Crypt Tools
+# Crypt Tools (Node.js Edition)
 
 ## Overview
-`crypt_tools.py` is a robust command-line tool for encrypting and decrypting files and text using the AES (Advanced Encryption Standard) algorithm. This updated version features enhanced security using **PBKDF2** (Password-Based Key Derivation Function 2) with HMAC-SHA256 for key derivation and a random 16-byte salt, making it significantly more secure against brute-force and dictionary attacks than previous versions. It also supports optional zlib compression, a versioned `CT02` file format, and encrypted-file inspection via CLI.
+`crypt_tools.js` is a robust command-line tool for encrypting and decrypting files and text using the AES (Advanced Encryption Standard) algorithm. This Node.js version features enhanced security using **PBKDF2** (Password-Based Key Derivation Function 2) with HMAC-SHA256 for key derivation and a random 16-byte salt, making it significantly more secure against brute-force and dictionary attacks. It also supports optional zlib compression, a versioned `CT02` file format, and encrypted-file inspection via CLI.
 
 ## Key Features
 - **AES-256 Encryption**: Uses AES in **GCM (Galois/Counter Mode)** for authenticated encryption, ensuring both confidentiality and integrity.
@@ -10,6 +10,7 @@
 - **Data Compression**: Optional Zlib compression to reduce file size before encryption.
 - **CLI Interface**: Easy-to-use command line interface for quick operations.
 - **Visual Feedback**: Colorful terminal output with emojis, color-coded status messages, and ASCII art banners.
+- **tqdm-style Progress Bar**: Dynamic progress with sizes, ETA, and throughput in a single line.
 - **File Logging**: Optional timestamped log file (`crypt_tools.log`) for audit trails.
 - **Secure Defaults**: Automatically handles Nonce generation and Salt management.
 - **File Pattern Expansion**: Encrypt/decrypt groups of files via wildcards (e.g., `*.md`, `crypt*.*`).
@@ -20,18 +21,15 @@
 ## Installation
 
 ### Prerequisites
-- Python 3.13+
-- Dependencies (managed via `uv` or `pip`):
-  - `pycryptodome`
-  - `tqdm` (Progress Bar)
-  - `zlib` (Standard Library)
+- Node.js 18.0+
+- npm or yarn
 
 ### Setup
 Clone the repository and install dependencies:
 ```bash
 git clone https://github.com/kelevramad/crypt_tools.git
 cd crypt_tools
-uv sync  # or pip install -r requirements.txt if available
+npm install
 ```
 
 ## Usage
@@ -39,36 +37,36 @@ uv sync  # or pip install -r requirements.txt if available
 ### Encrypt a String
 Encrypt a plain text string directly from the terminal.
 ```bash
-uv run crypt_tools.py --encrypt -t "Secret Message" -p "your_password"
+node crypt_tools.js --encrypt -t "Secret Message" -p "your_password"
 ```
 
 ### Decrypt a String
 Decrypt a base64 encoded string.
 ```bash
-uv run crypt_tools.py --decrypt -t "encrypted_base64_string" -p "your_password"
+node crypt_tools.js --decrypt -t "encrypted_base64_string" -p "your_password"
 ```
 
 ### Encrypt a File
 Encrypt a file (e.g., `document.txt`) to an encrypted output (default `.enc`).
 ```bash
 # Basic encryption (Password Prompt + Verification)
-uv run crypt_tools.py --encrypt -f document.txt
+node crypt_tools.js --encrypt -f document.txt
 
 # Non-interactive (password provided)
-uv run crypt_tools.py --encrypt -f document.txt -p "your_password"
+node crypt_tools.js --encrypt -f document.txt -p "your_password"
 
 # With compression
-uv run crypt_tools.py --encrypt -f document.txt -p "your_password" -c
+node crypt_tools.js --encrypt -f document.txt -p "your_password" -c
 ```
 
 ### Decrypt a File
 Decrypt an encrypted file (e.g., `document.enc`) back to its original form.
 ```bash
 # Basic decryption
-uv run crypt_tools.py --decrypt -f document.enc -p "your_password"
+node crypt_tools.js --decrypt -f document.enc -p "your_password"
 
 # Legacy files encrypted with compression may still require -c
-uv run crypt_tools.py --decrypt -f document.enc -p "your_password" -c
+node crypt_tools.js --decrypt -f document.enc -p "your_password" -c
 ```
 
 For new `CT02` files, compression is detected automatically during decryption. The `-c/--compress` flag is only needed for legacy files created before the versioned header was introduced.
@@ -76,31 +74,31 @@ For new `CT02` files, compression is detected automatically during decryption. T
 ### Inspect an Encrypted File
 Inspect metadata stored in an encrypted file without prompting for a password.
 ```bash
-uv run crypt_tools.py --inspect -f document.enc
+node crypt_tools.js --inspect -f document.enc
 ```
 
 ### Encrypt a Directory (Recursive)
 Encrypt all files in a folder recursively.
 ```bash
-uv run crypt_tools.py --encrypt -f ./my_folder -r
+node crypt_tools.js --encrypt -f ./my_folder -r -p "your_password"
 ```
 
 ### Decrypt a Directory (Recursive)
 Decrypt all `.enc` files in a folder recursively.
 ```bash
-uv run crypt_tools.py --decrypt -f ./my_folder -r
+node crypt_tools.js --decrypt -f ./my_folder -r -p "your_password"
 ```
 
 ### Encrypt by Pattern (Wildcard)
 ```bash
 # Encrypt all markdown files in the current directory
-uv run crypt_tools.py --encrypt -f "*.md" -p "your_password"
+node crypt_tools.js --encrypt -f "*.md" -p "your_password"
 
 # Encrypt files matching a prefix and any extension
-uv run crypt_tools.py --encrypt -f "crypt*.*" -p "your_password"
+node crypt_tools.js --encrypt -f "crypt*.*" -p "your_password"
 
 # Recursive wildcard inside a directory
-uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "your_password"
+node crypt_tools.js --encrypt -r -f ".\\tests\\*.pyc" -p "your_password"
 ```
 
 **Note (Windows/Powershell):** Quote wildcard patterns like `"*.md"` to avoid shell expansion.
@@ -126,7 +124,7 @@ uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "your_password"
 **Wildcard tip (Windows/Powershell):** Use quotes like `"*.md"` to pass patterns without shell expansion.
 
 ### Password Security
-- If no password is provided via `-p`, the tool will prompt securely using `getpass`
+- If no password is provided via `-p`, the tool will prompt securely (password input is hidden)
 - When encrypting, password verification is required (must enter twice)
 - Passwords are never stored or displayed
 - Password prompts include a live strength indicator and character-class hints
@@ -192,13 +190,13 @@ This tool improves upon older implementations by:
 ### CryptoEngine Methods
 | Method | Description |
 |--------|-------------|
-| `_derive_key(password, salt)` | Derives 256-bit key using PBKDF2-HMAC-SHA256 |
-| `_format_size(size)` | Converts bytes to human-readable format |
-| `encrypt_data(data, password)` | Encrypts bytes in memory |
-| `decrypt_data(enc_data, password)` | Decrypts bytes in memory |
-| `encrypt_file(input_path, output_path, password, compress)` | Encrypts file using streaming |
-| `decrypt_file(input_path, output_path, password, compress)` | Decrypts file using streaming |
-| `inspect_file(input_path)` | Reads encrypted file metadata without decrypting |
+| `_deriveKey(password, salt)` | Derives 256-bit key using PBKDF2-HMAC-SHA256 |
+| `_formatSize(size)` | Converts bytes to human-readable format |
+| `encryptData(data, password)` | Encrypts bytes in memory |
+| `decryptData(encData, password)` | Decrypts bytes in memory |
+| `encryptFile(inputPath, outputPath, password, compress)` | Encrypts file using streaming |
+| `decryptFile(inputPath, outputPath, password, compress)` | Decrypts file using streaming |
+| `inspectFile(inputPath)` | Reads encrypted file metadata without decrypting |
 
 ## Error Handling
 - **Integrity Check**: Failed decryption indicates wrong password or corrupted file
@@ -207,55 +205,37 @@ This tool improves upon older implementations by:
 - **Logging**: All operations logged to `crypt_tools.log` when `--log` flag is enabled
 
 ## Testing
-The project includes a comprehensive test suite covering CLI arguments, encryption logic, and error handling.
-
 Run tests using:
 ```bash
-uv run pytest
+npm test
 ```
 
 ## Building Executable
 
-You can compile `crypt_tools.py` into a standalone executable file (.exe) using **PyInstaller**. This allows you to run the tool on systems without Python installed.
+You can compile `crypt_tools.js` into a standalone executable file using **pkg** or **ncc**.
 
-### Using `uv` (Recommended)
-If you are using `uv`, you can run PyInstaller in a temporary environment with all required dependencies:
-
+### Using pkg
 ```bash
-uvx --with pycryptodome --with tqdm pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
+# Install pkg globally
+npm install -g pkg
+
+# Create executable for current platform
+pkg crypt_tools.js
+
+# Create executables for multiple platforms
+pkg crypt_tools.js --targets node18-win,node18-linux,node18-macos
 ```
 
-### Using `pipx`
-If you prefer `pipx`, you need to install PyInstaller and then inject the extra dependencies into its environment:
-
+### Using ncc (Node.js Compile)
 ```bash
-# 1. Install PyInstaller
-pipx install pyinstaller
+# Install ncc
+npm install -g @vercel/ncc
 
-# 2. Inject dependencies
-pipx inject pyinstaller pycryptodome tqdm
-
-# 3. Create the executable
-pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
-```
-
-### Global Installation
-If you prefer to have `pyinstaller` available globally on your system, you can install it using `uv` or `pip`:
-
-```bash
-# Using uv
-uv tool install pyinstaller --with pycryptodome --with tqdm
-
-# Using pip
-pip install -g pyinstaller pycryptodome tqdm
-```
-
-Once installed globally, you can generate the EXE directly:
-```bash
-pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
+# Compile to a single file
+ncc build crypt_tools.js -o dist
 ```
 
 ---
 
-**Author**: Center For Cyber Intelligence  
+**Author**: Center For Cyber Intelligence
 **Version**: 2.1.0
