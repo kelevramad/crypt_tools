@@ -186,3 +186,17 @@ __init__.py.bak
 # encrypted files
 *.enc
 *.dec
+
+node_modules/
+
+# pyinstaller
+*.spec
+
+coverage/
+.coveragerc
+.coverage.*
+.pytest_cache/
+.pytest_cache/
+v1/
+*.bak
+*.pyc/
