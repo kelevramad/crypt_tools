@@ -504,10 +504,10 @@ class CryptoEngine:
 
                 ciphertext_len = file_size - metadata['header_len'] - metadata['salt_len'] - metadata['nonce_len'] - metadata['tag_len']
                 ConsoleLogger.show('debug', f"Ciphertext length to decrypt: {self._format_size(ciphertext_len)}")
-
-                desc = "[🔓] Decrypting & Decompressing" if effective_compress else "[🔓] Decrypting"
+                
+                desc = "[🔓] Decrypting & Decompressing" if compress else "[🔓] Decrypting"
                 with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc=desc) as pbar:
-                    decompressor = zlib.decompressobj() if effective_compress else None
+                    decompressor = zlib.decompressobj() if compress else None
                     bytes_read = 0
 
                     while bytes_read < ciphertext_len:
@@ -558,45 +558,6 @@ class CryptoEngine:
                 try: os.remove(output_path)
                 except: pass
             return False
-
-    def inspect_file(self, input_path: str) -> dict:
-        if not os.path.isfile(input_path):
-            raise FileNotFoundError(input_path)
-
-        file_size = os.path.getsize(input_path)
-        with open(input_path, 'rb') as fin:
-            prefix = fin.read(Config.FIXED_HEADER_SIZE)
-
-        if len(prefix) < Config.FIXED_HEADER_SIZE:
-            raise ValueError("File is too small to inspect")
-
-        if prefix[:4] != Config.MAGIC:
-            raise ValueError("Unrecognized file format. Only CT02 encrypted files can be inspected reliably.")
-
-        metadata = _parse_format_from_bytes(prefix, text_payload=False)
-        if len(prefix) < metadata['header_len']:
-            with open(input_path, 'rb') as fin:
-                prefix = fin.read(metadata['header_len'])
-            metadata = _parse_ct02_header_from_bytes(prefix)
-
-        ciphertext_size = file_size - metadata['header_len'] - metadata['salt_len'] - metadata['nonce_len'] - metadata['tag_len']
-        if ciphertext_size < 0:
-            raise ValueError("Invalid encrypted file structure")
-
-        return {
-            'format': metadata['format'],
-            'version': metadata['version'],
-            'legacy': metadata['is_legacy'],
-            'compression': 'enabled' if metadata['compress'] else ('unknown' if metadata['compress'] is None else 'disabled'),
-            'kdf': 'PBKDF2-SHA256' if metadata['kdf_id'] == Config.KDF_PBKDF2 else f"unknown({metadata['kdf_id']})",
-            'iterations': metadata['iterations'],
-            'salt_length': metadata['salt_len'],
-            'nonce_length': metadata['nonce_len'],
-            'tag_length': metadata['tag_len'],
-            'header_length': metadata['header_len'],
-            'file_size': file_size,
-            'ciphertext_size': max(ciphertext_size, 0),
-        }
 
 # =========================
 # Password Strength Validator
@@ -1049,37 +1010,6 @@ def main(argv=None):
         else:
             file_list = [args.file]
 
-    if args.inspect and args.file:
-        target = file_list[0] if file_list else args.file
-        try:
-            details = engine.inspect_file(target)
-        except FileNotFoundError:
-            ConsoleLogger.show('error', f"File not found: {target}")
-            ConsoleLogger.show('error', "Operation failed: File does not exist")
-            sys.exit(1)
-        except ValueError as exc:
-            ConsoleLogger.show('error', f"Inspect failed: {exc}")
-            ConsoleLogger.show('error', f"File is not a supported encrypted file: {target}")
-            sys.exit(1)
-
-        ConsoleLogger.show('info', f"Format: {details['format']}", icon='🔍')
-        ConsoleLogger.show('info', f"Version: {details['version']}", icon='📜')
-        ConsoleLogger.show('info', f"Legacy: {'yes' if details['legacy'] else 'no'}", icon='🕰️')
-        ConsoleLogger.show('info', f"Compression: {details['compression']}", icon='🗜️')
-        ConsoleLogger.show('info', f"KDF: {details['kdf']}", icon='🧬')
-        ConsoleLogger.show('info', f"Iterations: {details['iterations']}", icon='🔁')
-        ConsoleLogger.show('info', f"Salt length: {details['salt_length']}", icon='🧂')
-        ConsoleLogger.show('info', f"Nonce length: {details['nonce_length']}", icon='🎲')
-        ConsoleLogger.show('info', f"Tag length: {details['tag_length']}", icon='🏷️')
-        ConsoleLogger.show('info', f"Header length: {details['header_length']}", icon='🧱')
-        ConsoleLogger.show('info', f"File size: {details['file_size']} bytes", icon='📦')
-        ConsoleLogger.show('info', f"Ciphertext size: {details['ciphertext_size']} bytes", icon='🔐')
-        end_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
-        ConsoleLogger.show('info', f"Session ended at {end_timestamp}", icon='🏁')
-        if ConsoleLogger.LOG_ENABLED:
-            ConsoleLogger.show('info', "="*80, show_console=False, log_file=True)
-        return
-
     if args.text:
         mode_str = "decrypt" if args.decrypt else "encrypt"
         compression_str = "disabled"  # Compression not available for text mode
@@ -1118,7 +1048,7 @@ def main(argv=None):
                 ConsoleLogger.show('info', f"Processing file: {target} ({engine._format_size(input_size)})", icon='📄')
 
     # Secure Password Input with Strength Indicator
-    if not args.inspect and not args.password:
+    if not args.password:
         # Only verify password when encrypting (not needed for decrypting)
         if not args.decrypt:
             args.password = getpass_verify_with_strength()
@@ -1126,7 +1056,7 @@ def main(argv=None):
         else:
             args.password = getpass_with_strength()
             ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
-    elif not args.inspect:
+    else:
         ConsoleLogger.show('debug', "Password provided via command line")
 
     if args.text:
