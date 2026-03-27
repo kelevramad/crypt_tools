@@ -15,6 +15,7 @@ import zlib
 import getpass
 import io
 import re
+import glob
 from enum import StrEnum
 from typing import Optional
 
@@ -531,6 +532,10 @@ def getpass_with_strength(prompt: str = "Enter Password: ") -> str:
     """Get password with real-time strength indicator."""
     import sys
     
+    # Fallback for non-interactive stdin (e.g., tests/CI).
+    if not sys.stdin.isatty():
+        return getpass.getpass(prompt)
+    
     # Write prompt
     white = TerminalColors.Foreground.WHITE
     reset = TerminalColors.RESET
@@ -649,6 +654,20 @@ def getpass_with_strength(prompt: str = "Enter Password: ") -> str:
 
 def getpass_verify_with_strength(prompt1: str = "Enter Password: ", prompt2: str = "Verify Password: ") -> str:
     """Get password with verification and strength indicator."""
+    # Fallback for non-interactive stdin (e.g., tests/CI).
+    if not sys.stdin.isatty():
+        password = getpass.getpass(prompt1)
+        if not password:
+            ConsoleLogger.show('error', 'Password cannot be empty.')
+            ConsoleLogger.show('error', 'Operation aborted: No password provided')
+            sys.exit(1)
+        password2 = getpass.getpass(prompt2)
+        if password != password2:
+            ConsoleLogger.show('error', 'Passwords do not match!')
+            ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
+            sys.exit(1)
+        return password
+
     password = getpass_with_strength(prompt1)
     if not password:
         ConsoleLogger.show('error', 'Password cannot be empty.')
@@ -768,19 +787,28 @@ def getpass_verify_with_strength(prompt1: str = "Enter Password: ", prompt2: str
 # =========================
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=Config.DESCRIPTION)
+    parser = argparse.ArgumentParser(
+        description=Config.DESCRIPTION,
+        epilog=(
+            "Notes:\n"
+            "  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively\n"
+            "    (equivalent to .\\temp\\**\\*.txt).\n"
+            "  - Password prompts show a live strength indicator."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-e', '--encrypt', action='store_true', help='Encrypt mode (default)')
     mode_group.add_argument('-d', '--decrypt', action='store_true', help='Decrypt mode')
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-t', '--text', help='Text to process')
-    group.add_argument('-f', '--file', help='File path to process')
+    group.add_argument('-f', '--file', help='File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
     
     parser.add_argument('-o', '--output', help='Output file path')
-    parser.add_argument('-p', '--password', required=False, help='Password (optional, will prompt if missing)')
+    parser.add_argument('-p', '--password', required=False, help='Password (optional; prompt includes strength indicator)')
     parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
-    parser.add_argument('-r', '--recursive', action='store_true', help='Recursively process directories')
+    parser.add_argument('-r', '--recursive', action='store_true', help='Recursively process directories or wildcard patterns (uses ** for subfolders)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--log', action='store_true', help='Enable logging to file')
     parser.add_argument('-v', '--version', action='version', version=Config.VERSION)
@@ -814,6 +842,31 @@ def main(argv=None):
         ConsoleLogger.show('info', f"Log file: {ConsoleLogger.LOG_FILE}")
         ConsoleLogger.show('info', "Logging to file: Enabled")
 
+    file_list = None
+    if args.file:
+        has_wildcard = any(ch in args.file for ch in ['*', '?', '[', ']'])
+        if has_wildcard:
+            if args.recursive:
+                if '**' in args.file:
+                    pattern = args.file
+                else:
+                    dir_part = os.path.dirname(args.file)
+                    base_part = os.path.basename(args.file)
+                    if dir_part in ['', '.']:
+                        pattern = os.path.join('**', base_part)
+                    else:
+                        pattern = os.path.join(dir_part, '**', base_part)
+                file_list = glob.glob(pattern, recursive=True)
+            else:
+                file_list = glob.glob(args.file, recursive=False)
+            file_list = [f for f in file_list if os.path.isfile(f)]
+            if not file_list:
+                ConsoleLogger.show('error', f"No files matched pattern: {args.file}")
+                ConsoleLogger.show('error', "Operation failed: No matching files")
+                sys.exit(1)
+        else:
+            file_list = [args.file]
+
     if args.text:
         mode_str = "decrypt" if args.decrypt else "encrypt"
         compression_str = "disabled"  # Compression not available for text mode
@@ -823,7 +876,7 @@ def main(argv=None):
         ConsoleLogger.show('info', f"Input text length: {len(args.text)} characters", log_file=False)
     elif args.file:
         ConsoleLogger.show('debug', f"File specified: {args.file}")
-        if not os.path.exists(args.file):
+        if not os.path.exists(args.file) and not any(ch in args.file for ch in ['*', '?', '[', ']']):
             ConsoleLogger.show('error', f"File not found: {args.file}")
             ConsoleLogger.show('error', "Operation failed: File does not exist")
             ConsoleLogger.show('error', "Please check the file path and try again")
@@ -844,8 +897,12 @@ def main(argv=None):
             ConsoleLogger.show('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {args.file}", icon='🔒' if not args.decrypt else '🔓')
             ConsoleLogger.show('info', "Recursive mode: enabled", icon='🔄')
         elif not is_dir:
-            input_size = os.path.getsize(args.file)
-            ConsoleLogger.show('info', f"Processing file: {args.file} ({engine._format_size(input_size)})", icon='📄')
+            if file_list and len(file_list) > 1:
+                ConsoleLogger.show('info', f"Processing files: {len(file_list)}", icon='📄')
+            else:
+                target = file_list[0] if file_list else args.file
+                input_size = os.path.getsize(target)
+                ConsoleLogger.show('info', f"Processing file: {target} ({engine._format_size(input_size)})", icon='📄')
 
     # Secure Password Input with Strength Indicator
     if not args.password:
@@ -949,27 +1006,40 @@ def main(argv=None):
             ConsoleLogger.show('info', f"Operations completed: {success_count}/{total_ops}", icon='✔️')
             ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
 
-        elif os.path.exists(args.file):
-            default_ext = '.enc' if not args.decrypt else '.dec'
-            output_file = args.output or (os.path.splitext(args.file)[0] + default_ext)
-
+        elif os.path.exists(args.file) or (file_list and len(file_list) > 0):
+            targets = file_list if file_list else [args.file]
+            success_count = 0
+            fail_count = 0
             start_time = time.time()
 
-            if not args.decrypt:
-                success = engine.encrypt_file(args.file, output_file, args.password, args.compress)
-            else:
-                success = engine.decrypt_file(args.file, output_file, args.password, args.compress)
+            for target in targets:
+                if os.path.isdir(target):
+                    continue
+                if args.output and len(targets) == 1:
+                    output_file = args.output
+                else:
+                    if not args.decrypt:
+                        output_file = target + '.enc'
+                    else:
+                        output_file = os.path.splitext(target)[0] + '.dec'
+                ok = engine.encrypt_file(target, output_file, args.password, args.compress) if not args.decrypt else engine.decrypt_file(target, output_file, args.password, args.compress)
+                if ok:
+                    success_count += 1
+                    ConsoleLogger.show('success', f"File {'encrypted' if not args.decrypt else 'decrypted'}: {output_file} ({engine._format_size(os.path.getsize(output_file))})", icon='📄')
+                else:
+                    fail_count += 1
 
             elapsed_time = time.time() - start_time
+            total_ops = success_count + fail_count
 
-            if success:
-                # Display completion summary
-                ConsoleLogger.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
-                ConsoleLogger.show('success', f"File {'encrypted' if not args.decrypt else 'decrypted'}: {output_file} ({engine._format_size(os.path.getsize(output_file))})", icon='📄')
+            ConsoleLogger.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
+            if total_ops == 1 and success_count == 1:
                 ConsoleLogger.show('info', "Operations completed: 1/1", icon='✔️')
-                ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
             else:
-                # Error message already displayed by decrypt_file/encrypt_file
+                ConsoleLogger.show('info', f"Operations completed: {success_count}/{total_ops}", icon='✔️')
+            ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
+
+            if fail_count > 0:
                 sys.exit(1)
         else:
             ConsoleLogger.show('error', f"File not found: {args.file}")
