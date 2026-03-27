@@ -14,6 +14,7 @@ import time
 import zlib
 import getpass
 import io
+import re
 from enum import StrEnum
 from typing import Optional
 
@@ -270,9 +271,9 @@ class CryptoEngine:
             decrypted = cipher.decrypt_and_verify(ciphertext, tag)
             ConsoleLogger.show('debug', f"Decryption successful. Plaintext size: {len(decrypted)} bytes")
             return decrypted
-            
-        except (ValueError, KeyError) as e:
-            ConsoleLogger.show('error', f"Decryption failed: {str(e)}")
+
+        except (ValueError, KeyError):
+            ConsoleLogger.show('error', "Decryption failed!")
             return None
 
     def encrypt_file(self, input_path: str, output_path: str, password: str, compress: bool = False) -> bool:
@@ -299,20 +300,21 @@ class CryptoEngine:
                 compressor = zlib.compressobj(level=9) if compress else None
                 if compress:
                     ConsoleLogger.show('debug', "Compression enabled (zlib level 9)")
-                
-                with tqdm(total=file_size, unit='B', unit_scale=True, desc="[🔒] Encrypting") as pbar:
+
+                desc = "[🔒] Compressing & Encrypting" if compress else "[🔒] Encrypting"
+                with tqdm(total=file_size, unit='B', unit_scale=True, desc=desc) as pbar:
                     while True:
                         chunk = fin.read(Config.CHUNK_SIZE)
                         if not chunk:
                             break
-                        
+
                         if compressor:
                             compressed_chunk = compressor.compress(chunk)
                             if compressed_chunk:
                                 fout.write(cipher.encrypt(compressed_chunk))
                         else:
                             fout.write(cipher.encrypt(chunk))
-                        
+
                         pbar.update(len(chunk))
                 
                 ConsoleLogger.show('debug', "Reached end of input file")
@@ -328,8 +330,6 @@ class CryptoEngine:
                 ConsoleLogger.show('debug', f"Writing authentication tag ({len(tag)} bytes)")
                 fout.write(tag)
 
-            # Log encryption progress completion
-            ConsoleLogger.show('info', f"Encrypting: {self._format_size(file_size)} encrypted successfully", icon='🔒')
             return True
 
         except Exception as e:
@@ -366,7 +366,8 @@ class CryptoEngine:
                 ciphertext_len = file_size - header_size - footer_size
                 ConsoleLogger.show('debug', f"Ciphertext length to decrypt: {self._format_size(ciphertext_len)}")
                 
-                with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc="[🔓] Decrypting") as pbar:
+                desc = "[🔓] Decrypting & Decompressing" if compress else "[🔓] Decrypting"
+                with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc=desc) as pbar:
                     decompressor = zlib.decompressobj() if compress else None
                     bytes_read = 0
 
@@ -409,8 +410,6 @@ class CryptoEngine:
                     return False
 
             ConsoleLogger.show('success', "Integrity Verified. Decryption successful.")
-            # Log decryption progress completion
-            ConsoleLogger.show('info', f"Decrypting: {self._format_size(file_size)} decrypted successfully", icon='🔓')
             return True
 
         except Exception as e:
@@ -420,6 +419,349 @@ class CryptoEngine:
                 try: os.remove(output_path)
                 except: pass
             return False
+
+# =========================
+# Password Strength Validator
+# =========================
+
+class PasswordStrength:
+    """Password strength validator with real-time feedback."""
+    
+    STRENGTHS = {
+        'VERY_WEAK': {'label': 'Very Weak', 'color': '\033[91m\033[1m', 'reset': '\033[0m', 'icon': '❌'},  # Red Bold
+        'WEAK': {'label': 'Weak', 'color': '\033[91m', 'reset': '\033[0m', 'icon': '⚠️'},                   # Red
+        'MEDIUM': {'label': 'Medium', 'color': '\033[93m', 'reset': '\033[0m', 'icon': '⚡'},                # Yellow
+        'STRONG': {'label': 'Strong', 'color': '\033[92m', 'reset': '\033[0m', 'icon': '✅'},                # Green
+        'VERY_STRONG': {'label': 'Very Strong', 'color': '\033[92m\033[1m', 'reset': '\033[0m', 'icon': '🔒'} # Green Bold
+    }
+    
+    @classmethod
+    def check(cls, password: str) -> dict:
+        """Check password strength and return detailed results."""
+        has_lower = bool(re.search(r'[a-z]', password))
+        has_upper = bool(re.search(r'[A-Z]', password))
+        has_number = bool(re.search(r'[0-9]', password))
+        has_symbol = bool(re.search(r'[^a-zA-Z0-9]', password))
+        length = len(password)
+        
+        score = 0
+        
+        # Length scoring
+        if length >= 8:
+            score += 1
+        if length >= 12:
+            score += 1
+        if length >= 16:
+            score += 1
+        
+        # Character type scoring
+        if has_lower:
+            score += 1
+        if has_upper:
+            score += 1
+        if has_number:
+            score += 1
+        if has_symbol:
+            score += 1
+        
+        # Determine strength
+        if score <= 2 or length < 6:
+            strength = 'VERY_WEAK'
+        elif score <= 3 or length < 8:
+            strength = 'WEAK'
+        elif score <= 5:
+            strength = 'MEDIUM'
+        elif score <= 6:
+            strength = 'STRONG'
+        else:
+            strength = 'VERY_STRONG'
+        
+        return {
+            'score': score,
+            'strength': strength,
+            'has_lower': has_lower,
+            'has_upper': has_upper,
+            'has_number': has_number,
+            'has_symbol': has_symbol,
+            'length': length
+        }
+    
+    @classmethod
+    def get_indicator(cls, password: str) -> str:
+        """Get formatted strength indicator with colors."""
+        result = cls.check(password)
+        strength = cls.STRENGTHS[result['strength']]
+        return f"{strength['color']}{strength['icon']} {strength['label']}{strength['reset']}"
+    
+    @classmethod
+    def get_char_types(cls, password: str) -> str:
+        """Get formatted character types present in password."""
+        result = cls.check(password)
+        types = []
+        check_icon = '✓'
+        cross_icon = '✗'
+        green = TerminalColors.Foreground.GREEN
+        red = TerminalColors.Foreground.RED
+        reset = TerminalColors.RESET
+        
+        if result['has_lower']:
+            types.append(f"{green}{check_icon} Lower{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Lower{reset}")
+        
+        if result['has_upper']:
+            types.append(f"{green}{check_icon} Upper{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Upper{reset}")
+        
+        if result['has_number']:
+            types.append(f"{green}{check_icon} Number{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Number{reset}")
+        
+        if result['has_symbol']:
+            types.append(f"{green}{check_icon} Symbol{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Symbol{reset}")
+        
+        return ' '.join(types)
+
+
+def getpass_with_strength(prompt: str = "Enter Password: ") -> str:
+    """Get password with real-time strength indicator."""
+    import sys
+    
+    # Write prompt
+    white = TerminalColors.Foreground.WHITE
+    reset = TerminalColors.RESET
+    sys.stdout.write(f"{white}[{reset}🔑{white}]{reset} {prompt}")
+    sys.stdout.flush()
+    
+    # Hide cursor
+    sys.stdout.write('\033[?25l')
+    sys.stdout.flush()
+    
+    password = ''
+    
+    # Check if running on Windows
+    if sys.platform == 'win32':
+        import msvcrt
+        
+        while True:
+            char = msvcrt.getch().decode('utf-8', errors='ignore')
+            
+            if char == '\r' or char == '\n':
+                # Enter pressed - show cursor and newline
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                break
+            elif char == '\x03':
+                # Ctrl+C - show cursor
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                sys.exit(0)
+            elif char == '\x00' or char == '\xe0':
+                # Special key prefix, read next char
+                char2 = msvcrt.getch().decode('utf-8', errors='ignore')
+                if char2 == 'H':  # Up arrow
+                    pass
+                elif char2 == 'P':  # Down arrow
+                    pass
+                elif char2 == 'K':  # Left arrow
+                    pass
+                elif char2 == 'M':  # Right arrow
+                    pass
+                elif char2 == '\x53':  # Delete
+                    pass
+            elif char == '\b' or char == '\x08':
+                # Backspace
+                if password:
+                    password = password[:-1]
+                    # Clear line and rewrite
+                    strength_indicator = PasswordStrength.get_indicator(password)
+                    char_types = PasswordStrength.get_char_types(password)
+                    asterisks = '*' * len(password)
+                    sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+            elif char >= ' ' and len(char) == 1:
+                # Regular character
+                password += char
+                # Update display with strength indicator
+                strength_indicator = PasswordStrength.get_indicator(password)
+                char_types = PasswordStrength.get_char_types(password)
+                asterisks = '*' * len(password)
+                sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                sys.stdout.flush()
+    else:
+        # Unix/Linux/Mac - use termios
+        import tty
+        import termios
+        
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        
+        try:
+            tty.setraw(fd)
+            
+            while True:
+                char = sys.stdin.read(1)
+                
+                if char == '\r' or char == '\n':
+                    # Enter pressed - show cursor
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x03':
+                    # Ctrl+C - show cursor
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    sys.exit(0)
+                elif char == '\x04':
+                    # Ctrl+D - show cursor
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x7f' or char == '\b':
+                    # Backspace
+                    if password:
+                        password = password[:-1]
+                        # Clear line and rewrite
+                        strength_indicator = PasswordStrength.get_indicator(password)
+                        char_types = PasswordStrength.get_char_types(password)
+                        asterisks = '*' * len(password)
+                        sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                        sys.stdout.flush()
+                elif char >= ' ' and len(char) == 1:
+                    # Regular character
+                    password += char
+                    # Update display with strength indicator
+                    strength_indicator = PasswordStrength.get_indicator(password)
+                    char_types = PasswordStrength.get_char_types(password)
+                    asterisks = '*' * len(password)
+                    sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    
+    return password
+
+
+def getpass_verify_with_strength(prompt1: str = "Enter Password: ", prompt2: str = "Verify Password: ") -> str:
+    """Get password with verification and strength indicator."""
+    password = getpass_with_strength(prompt1)
+    if not password:
+        ConsoleLogger.show('error', 'Password cannot be empty.')
+        ConsoleLogger.show('error', 'Operation aborted: No password provided')
+        sys.exit(1)
+
+    ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
+
+    white = TerminalColors.Foreground.WHITE
+    reset = TerminalColors.RESET
+    sys.stdout.write(f"{white}[{reset}🔄{white}]{reset} {prompt2}")
+    sys.stdout.flush()
+
+    # Hide cursor
+    sys.stdout.write('\033[?25l')
+    sys.stdout.flush()
+
+    password2 = ''
+
+    # Check if running on Windows
+    if sys.platform == 'win32':
+        import msvcrt
+
+        while True:
+            char = msvcrt.getch().decode('utf-8', errors='ignore')
+
+            if char == '\r' or char == '\n':
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                break
+            elif char == '\x03':
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                sys.exit(0)
+            elif char == '\x00' or char == '\xe0':
+                char2 = msvcrt.getch().decode('utf-8', errors='ignore')
+                if char2 == 'H':  # Up arrow
+                    pass
+                elif char2 == 'P':  # Down arrow
+                    pass
+                elif char2 == 'K':  # Left arrow
+                    pass
+                elif char2 == 'M':  # Right arrow
+                    pass
+                elif char2 == '\x53':  # Delete
+                    pass
+            elif char == '\b' or char == '\x08':
+                if password2:
+                    password2 = password2[:-1]
+                    strength_indicator = PasswordStrength.get_indicator(password2)
+                    char_types = PasswordStrength.get_char_types(password2)
+                    asterisks = '*' * len(password2)
+                    sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+            elif char >= ' ' and len(char) == 1:
+                password2 += char
+                strength_indicator = PasswordStrength.get_indicator(password2)
+                char_types = PasswordStrength.get_char_types(password2)
+                asterisks = '*' * len(password2)
+                sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                sys.stdout.flush()
+    else:
+        # Unix/Linux/Mac - use termios
+        import tty
+        import termios
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
+        try:
+            tty.setraw(fd)
+
+            while True:
+                char = sys.stdin.read(1)
+
+                if char == '\r' or char == '\n':
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x03':
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    sys.exit(0)
+                elif char == '\x04':
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x7f' or char == '\b':
+                    if password2:
+                        password2 = password2[:-1]
+                        strength_indicator = PasswordStrength.get_indicator(password2)
+                        char_types = PasswordStrength.get_char_types(password2)
+                        asterisks = '*' * len(password2)
+                        sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                        sys.stdout.flush()
+                elif char >= ' ' and len(char) == 1:
+                    password2 += char
+                    strength_indicator = PasswordStrength.get_indicator(password2)
+                    char_types = PasswordStrength.get_char_types(password2)
+                    asterisks = '*' * len(password2)
+                    sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    if password != password2:
+        ConsoleLogger.show('error', 'Passwords do not match!')
+        ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
+        sys.exit(1)
+
+    return password
+
 
 # =========================
 # CLI Logic
@@ -472,42 +814,52 @@ def main(argv=None):
         ConsoleLogger.show('info', f"Log file: {ConsoleLogger.LOG_FILE}")
         ConsoleLogger.show('info', "Logging to file: Enabled")
 
-    # Secure Password Input
-    if not args.password:
-        ConsoleLogger.show('info', "Enter Password: ", icon='🔑', log_file=False)
-        args.password = getpass.getpass()
-        ConsoleLogger.show('info', "Password entered by user", icon='🔑')
-        if not args.password:
-             ConsoleLogger.show('error', "Password cannot be empty.")
-             ConsoleLogger.show('error', "Operation aborted: No password provided")
-             sys.exit(1)
-
-        # Verify password if encrypting
-        if not args.decrypt:
-            ConsoleLogger.show('debug', "Prompting for verification password")
-            ConsoleLogger.show('info', "Verify Password: ", icon='🔄', log_file=False)
-            verify_pass = getpass.getpass()
-            ConsoleLogger.show('info', "Password verification entered", icon='🔄')
-            if args.password != verify_pass:
-                ConsoleLogger.show('error', "Passwords do not match!")
-                ConsoleLogger.show('error', "Operation aborted due to password mismatch")
-                sys.exit(1)
-    else:
-        ConsoleLogger.show('debug', "Password provided via command line")
-
     if args.text:
-        # Display formatted status with emojis for text mode
         mode_str = "decrypt" if args.decrypt else "encrypt"
         compression_str = "disabled"  # Compression not available for text mode
-        lock_emoji = "🔓" if args.decrypt else "🔐"
-        green = TerminalColors.Foreground.GREEN
-        blue = TerminalColors.Foreground.BLUE
-
         ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
         ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
         ConsoleLogger.show('info', "Processing text...", icon='💬')
         ConsoleLogger.show('info', f"Input text length: {len(args.text)} characters", log_file=False)
+    elif args.file:
+        ConsoleLogger.show('debug', f"File specified: {args.file}")
+        if not os.path.exists(args.file):
+            ConsoleLogger.show('error', f"File not found: {args.file}")
+            ConsoleLogger.show('error', "Operation failed: File does not exist")
+            ConsoleLogger.show('error', "Please check the file path and try again")
+            sys.exit(1)
 
+        is_dir = os.path.isdir(args.file)
+        if is_dir and not args.recursive:
+            ConsoleLogger.show('error', "Path is a directory. Use -r/--recursive to process directories.")
+            ConsoleLogger.show('error', "Operation aborted: Directory specified without --recursive flag")
+            sys.exit(1)
+
+        mode_str = "decrypt" if args.decrypt else "encrypt"
+        compression_str = "enabled" if args.compress else "disabled"
+        ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
+        ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
+        if is_dir and args.recursive:
+            ConsoleLogger.show('info', f"Processing directory: {args.file}", icon='📁')
+            ConsoleLogger.show('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {args.file}", icon='🔒' if not args.decrypt else '🔓')
+            ConsoleLogger.show('info', "Recursive mode: enabled", icon='🔄')
+        elif not is_dir:
+            input_size = os.path.getsize(args.file)
+            ConsoleLogger.show('info', f"Processing file: {args.file} ({engine._format_size(input_size)})", icon='📄')
+
+    # Secure Password Input with Strength Indicator
+    if not args.password:
+        # Only verify password when encrypting (not needed for decrypting)
+        if not args.decrypt:
+            args.password = getpass_verify_with_strength()
+            ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
+        else:
+            args.password = getpass_with_strength()
+            ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
+    else:
+        ConsoleLogger.show('debug', "Password provided via command line")
+
+    if args.text:
         start_time = time.time()
 
         # Default to encrypt if decrypt is not explicitly set
@@ -523,24 +875,18 @@ def main(argv=None):
             ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
         else:
             ConsoleLogger.show('info', "Decrypting text...")
-            try:
-                ConsoleLogger.show('debug', "Decoding Base64 text input")
-                raw_data = base64.b64decode(args.text)
-                result = engine.decrypt_data(raw_data, args.password)
-                if result:
-                    ConsoleLogger.show('success', f"Decrypted: {result.decode('utf-8')}", log_file=False)
-                    elapsed_time = time.time() - start_time
-                    ConsoleLogger.show('info', f"Output decrypted text length: {len(result)} characters", log_file=False)
-                    ConsoleLogger.show('success', "Decryption completed successfully", icon='✅')
-                    ConsoleLogger.show('info', f"Operations completed: 1/1", icon='✔️')
-                    ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
-            except Exception as e:
-                ConsoleLogger.show('error', f"Failed: {e}")
-                ConsoleLogger.show('error', "Operation failed: Decryption error")
+            ConsoleLogger.show('debug', "Decoding Base64 text input")
+            raw_data = base64.b64decode(args.text)
+            result = engine.decrypt_data(raw_data, args.password)
+            if result:
+                ConsoleLogger.show('success', f"Decrypted: {result.decode('utf-8')}", log_file=False)
+                elapsed_time = time.time() - start_time
+                ConsoleLogger.show('info', f"Output decrypted text length: {len(result)} characters", log_file=False)
+                ConsoleLogger.show('success', "Decryption completed successfully", icon='✅')
+                ConsoleLogger.show('info', f"Operations completed: 1/1", icon='✔️')
+                ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
 
     elif args.file:
-        ConsoleLogger.show('debug', f"File specified: {args.file}")
-
         # Recursive Directory Processing
         if args.recursive and os.path.isdir(args.file):
             input_dir = args.file
@@ -551,12 +897,7 @@ def main(argv=None):
             yellow = TerminalColors.Foreground.YELLOW
             blue = TerminalColors.Foreground.BLUE
 
-            ConsoleLogger.show('info', f"Processing directory: {input_dir}", icon='📁')
             ConsoleLogger.show('debug', "Recursive mode enabled")
-            ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
-            ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
-            ConsoleLogger.show('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {input_dir}", icon='🔒' if not args.decrypt else '🔓')
-            ConsoleLogger.show('info', "Recursive mode: enabled", icon='🔄')
 
             success_count = 0
             fail_count = 0
@@ -609,25 +950,8 @@ def main(argv=None):
             ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
 
         elif os.path.exists(args.file):
-            if os.path.isdir(args.file):
-                 ConsoleLogger.show('error', f"Path is a directory. Use -r/--recursive to process directories.")
-                 ConsoleLogger.show('error', "Operation aborted: Directory specified without --recursive flag")
-                 sys.exit(1)
-
             default_ext = '.enc' if not args.decrypt else '.dec'
             output_file = args.output or (os.path.splitext(args.file)[0] + default_ext)
-
-            # Display formatted status with emojis
-            mode_str = "decrypt" if args.decrypt else "encrypt"
-            compression_str = "enabled" if args.compress else "disabled"
-            lock_emoji = "🔓" if args.decrypt else "🔐"
-            green = TerminalColors.Foreground.GREEN
-            blue = TerminalColors.Foreground.BLUE
-
-            input_size = os.path.getsize(args.file)
-            ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
-            ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
-            ConsoleLogger.show('info', f"Processing file: {args.file} ({engine._format_size(input_size)})", icon='📄')
 
             start_time = time.time()
 
@@ -645,7 +969,7 @@ def main(argv=None):
                 ConsoleLogger.show('info', "Operations completed: 1/1", icon='✔️')
                 ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
             else:
-                ConsoleLogger.show('error', f"{'Decryption' if args.decrypt else 'Encryption'} failed!")
+                # Error message already displayed by decrypt_file/encrypt_file
                 sys.exit(1)
         else:
             ConsoleLogger.show('error', f"File not found: {args.file}")
