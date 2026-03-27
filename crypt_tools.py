@@ -14,6 +14,8 @@ import time
 import zlib
 import getpass
 import io
+import re
+import glob
 from enum import StrEnum
 from typing import Optional
 
@@ -43,6 +45,15 @@ class Config:
     AUTHOR = 'Center For Cyber Intelligence'
     DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
     VERSION = "2.1.0"
+
+    # File format
+    MAGIC = b"CT02"
+    FORMAT_VERSION = 2
+    FLAG_COMPRESS = 0x01
+    FLAG_TEXT = 0x02
+    FLAG_KEYFILE = 0x04
+    KDF_PBKDF2 = 0x01
+    FIXED_HEADER_SIZE = 16
     
     # AES-GCM Constants
     KEY_SIZE = 32           # 256 bits
@@ -197,6 +208,106 @@ class Banner:
         print(f"{cyan}{Config.DESCRIPTION} v{Config.VERSION}{reset}")
         print(f"{cyan}Author: {Config.AUTHOR}{reset}\n")
 
+
+def _uint32_to_bytes(value: int) -> bytes:
+    return value.to_bytes(4, byteorder='big', signed=False)
+
+
+def _bytes_to_uint32(raw: bytes) -> int:
+    return int.from_bytes(raw, byteorder='big', signed=False)
+
+
+def _build_header(
+    *,
+    compress: bool = False,
+    is_text: bool = False,
+    kdf_id: int = Config.KDF_PBKDF2,
+    iterations: int = Config.PBKDF2_ITERATIONS,
+) -> bytes:
+    flags = 0
+    if compress:
+        flags |= Config.FLAG_COMPRESS
+    if is_text:
+        flags |= Config.FLAG_TEXT
+
+    kdf_params = _uint32_to_bytes(iterations)
+    return b"".join(
+        [
+            Config.MAGIC,
+            bytes([Config.FORMAT_VERSION]),
+            bytes([flags]),
+            bytes([kdf_id]),
+            b"\x00",
+            bytes([Config.SALT_SIZE]),
+            bytes([Config.NONCE_SIZE]),
+            bytes([Config.TAG_SIZE]),
+            bytes([len(kdf_params)]),
+            kdf_params,
+        ]
+    )
+
+
+def _parse_ct02_header_from_bytes(data: bytes) -> dict:
+    if len(data) < 12:
+        raise ValueError("CT02 header too short")
+    if data[:4] != Config.MAGIC:
+        raise ValueError("Invalid CT02 magic")
+
+    version = data[4]
+    flags = data[5]
+    kdf_id = data[6]
+    salt_len = data[8]
+    nonce_len = data[9]
+    tag_len = data[10]
+    kdf_param_len = data[11]
+    header_len = 12 + kdf_param_len
+
+    if len(data) < header_len:
+        raise ValueError("Incomplete CT02 header")
+
+    kdf_params = data[12:header_len]
+    iterations = _bytes_to_uint32(kdf_params) if kdf_param_len == 4 else Config.PBKDF2_ITERATIONS
+
+    return {
+        'format': Config.MAGIC.decode('ascii'),
+        'version': version,
+        'flags': flags,
+        'compress': bool(flags & Config.FLAG_COMPRESS),
+        'is_text': bool(flags & Config.FLAG_TEXT),
+        'kdf_id': kdf_id,
+        'iterations': iterations,
+        'salt_len': salt_len,
+        'nonce_len': nonce_len,
+        'tag_len': tag_len,
+        'kdf_param_len': kdf_param_len,
+        'header_len': header_len,
+        'is_legacy': False,
+    }
+
+
+def _parse_legacy_header(*, text_payload: bool = False) -> dict:
+    return {
+        'format': 'legacy-v2.1',
+        'version': 'legacy',
+        'flags': 0,
+        'compress': None,
+        'is_text': text_payload,
+        'kdf_id': Config.KDF_PBKDF2,
+        'iterations': Config.PBKDF2_ITERATIONS,
+        'salt_len': Config.SALT_SIZE,
+        'nonce_len': Config.NONCE_SIZE,
+        'tag_len': Config.TAG_SIZE,
+        'kdf_param_len': 4,
+        'header_len': 0,
+        'is_legacy': True,
+    }
+
+
+def _parse_format_from_bytes(data: bytes, *, text_payload: bool = False) -> dict:
+    if len(data) >= 4 and data[:4] == Config.MAGIC:
+        return _parse_ct02_header_from_bytes(data)
+    return _parse_legacy_header(text_payload=text_payload)
+
 # =========================
 # Core Logic (Engine)
 # =========================
@@ -229,11 +340,12 @@ class CryptoEngine:
     def encrypt_data(self, data: bytes, password: str) -> bytes:
         """
         Encrypt bytes in memory.
-        Format: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
+        Format v2.2: [HEADER] + [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
         """
         ConsoleLogger.show('debug', f"Starting in-memory data encryption ({len(data)} bytes input)")
         salt = os.urandom(Config.SALT_SIZE)
         nonce = os.urandom(Config.NONCE_SIZE)
+        header = _build_header(is_text=True)
         ConsoleLogger.show('debug', f"Generated salt ({Config.SALT_SIZE} bytes) and nonce ({Config.NONCE_SIZE} bytes)")
         key = self._derive_key(password, salt)
         
@@ -241,25 +353,39 @@ class CryptoEngine:
         cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
         ciphertext, tag = cipher.encrypt_and_digest(data)
         ConsoleLogger.show('debug', f"Encryption complete. Ciphertext size: {len(ciphertext)} bytes, Tag size: {len(tag)} bytes")
-        
-        return salt + nonce + tag + ciphertext
+
+        return header + salt + nonce + ciphertext + tag
 
     def decrypt_data(self, enc_data: bytes, password: str) -> Optional[bytes]:
         """
         Decrypt bytes in memory.
-        Expects: [SALT(16)] + [NONCE(12)] + [TAG(16)] + [CIPHERTEXT]
+        Supports:
+        - v2.2: [HEADER] + [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
+        - legacy text payload: [SALT] + [NONCE] + [TAG] + [CIPHERTEXT]
         """
         try:
             ConsoleLogger.show('debug', f"Starting in-memory data decryption. Total input size: {len(enc_data)} bytes")
-            overhead = Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
+            metadata = _parse_format_from_bytes(enc_data, text_payload=True)
+            overhead = metadata['header_len'] + metadata['salt_len'] + metadata['nonce_len'] + metadata['tag_len']
             if len(enc_data) < overhead:
                 ConsoleLogger.show('debug', "Input data is smaller than minimum overhead")
                 raise ValueError("Data too short")
 
-            salt = enc_data[:Config.SALT_SIZE]
-            nonce = enc_data[Config.SALT_SIZE : Config.SALT_SIZE + Config.NONCE_SIZE]
-            tag = enc_data[Config.SALT_SIZE + Config.NONCE_SIZE : overhead]
-            ciphertext = enc_data[overhead:]
+            if metadata['is_legacy']:
+                salt = enc_data[:metadata['salt_len']]
+                nonce = enc_data[metadata['salt_len'] : metadata['salt_len'] + metadata['nonce_len']]
+                tag_start = metadata['salt_len'] + metadata['nonce_len']
+                tag_end = tag_start + metadata['tag_len']
+                tag = enc_data[tag_start:tag_end]
+                ciphertext = enc_data[tag_end:]
+            else:
+                start = metadata['header_len']
+                salt = enc_data[start : start + metadata['salt_len']]
+                nonce_start = start + metadata['salt_len']
+                nonce_end = nonce_start + metadata['nonce_len']
+                nonce = enc_data[nonce_start:nonce_end]
+                tag = enc_data[-metadata['tag_len']:]
+                ciphertext = enc_data[nonce_end:-metadata['tag_len']]
             ConsoleLogger.show('debug', f"Extracted salt, nonce, tag, and ciphertext ({len(ciphertext)} bytes)")
 
             key = self._derive_key(password, salt)
@@ -270,15 +396,15 @@ class CryptoEngine:
             decrypted = cipher.decrypt_and_verify(ciphertext, tag)
             ConsoleLogger.show('debug', f"Decryption successful. Plaintext size: {len(decrypted)} bytes")
             return decrypted
-            
-        except (ValueError, KeyError) as e:
-            ConsoleLogger.show('error', f"Decryption failed: {str(e)}")
+
+        except (ValueError, KeyError):
+            ConsoleLogger.show('error', "Decryption failed!")
             return None
 
     def encrypt_file(self, input_path: str, output_path: str, password: str, compress: bool = False) -> bool:
         """
         Encrypts a file using streaming (low memory usage).
-        Format: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
+        Format v2.2: [HEADER] + [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
         """
         try:
             ConsoleLogger.show('debug', f"Starting file encryption: {input_path} -> {output_path}")
@@ -290,29 +416,32 @@ class CryptoEngine:
             key = self._derive_key(password, salt)
             ConsoleLogger.show('debug', "Initializing AES-GCM cipher")
             cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+            header = _build_header(compress=compress, is_text=False)
 
             with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
-                # Write Header: SALT + NONCE
+                # Write Header: CT02 + metadata + SALT + NONCE
+                fout.write(header)
                 fout.write(salt)
                 fout.write(nonce)
                 
                 compressor = zlib.compressobj(level=9) if compress else None
                 if compress:
                     ConsoleLogger.show('debug', "Compression enabled (zlib level 9)")
-                
-                with tqdm(total=file_size, unit='B', unit_scale=True, desc="[🔒] Encrypting") as pbar:
+
+                desc = "[🔒] Compressing & Encrypting" if compress else "[🔒] Encrypting"
+                with tqdm(total=file_size, unit='B', unit_scale=True, desc=desc) as pbar:
                     while True:
                         chunk = fin.read(Config.CHUNK_SIZE)
                         if not chunk:
                             break
-                        
+
                         if compressor:
                             compressed_chunk = compressor.compress(chunk)
                             if compressed_chunk:
                                 fout.write(cipher.encrypt(compressed_chunk))
                         else:
                             fout.write(cipher.encrypt(chunk))
-                        
+
                         pbar.update(len(chunk))
                 
                 ConsoleLogger.show('debug', "Reached end of input file")
@@ -328,8 +457,6 @@ class CryptoEngine:
                 ConsoleLogger.show('debug', f"Writing authentication tag ({len(tag)} bytes)")
                 fout.write(tag)
 
-            # Log encryption progress completion
-            ConsoleLogger.show('info', f"Encrypting: {self._format_size(file_size)} encrypted successfully", icon='🔒')
             return True
 
         except Exception as e:
@@ -342,32 +469,45 @@ class CryptoEngine:
     def decrypt_file(self, input_path: str, output_path: str, password: str, compress: bool = False) -> bool:
         """
         Decrypts a file using streaming.
-        Expects: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
+        Supports:
+        - v2.2: [HEADER] + [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
+        - legacy file: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
         """
         try:
             file_size = os.path.getsize(input_path)
             ConsoleLogger.show('debug', f"Starting file decryption: {input_path} (size: {self._format_size(file_size)}) -> {output_path}")
-            header_size = Config.SALT_SIZE + Config.NONCE_SIZE
-            footer_size = Config.TAG_SIZE
-            
-            if file_size < header_size + footer_size:
+            minimum_overhead = Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
+
+            if file_size < minimum_overhead:
                 ConsoleLogger.show('debug', "File size is smaller than required header + footer overhead")
                 raise ValueError("File too small")
 
             with open(input_path, 'rb') as fin:
-                salt = fin.read(Config.SALT_SIZE)
-                nonce = fin.read(Config.NONCE_SIZE)
-                
+                prefix = fin.read(Config.FIXED_HEADER_SIZE)
+                metadata = _parse_format_from_bytes(prefix, text_payload=False)
+                if metadata['is_legacy']:
+                    fin.seek(0)
+                    effective_compress = compress
+                else:
+                    if len(prefix) < metadata['header_len']:
+                        prefix += fin.read(metadata['header_len'] - len(prefix))
+                    metadata = _parse_ct02_header_from_bytes(prefix)
+                    effective_compress = metadata['compress']
+
+                salt = fin.read(metadata['salt_len'])
+                nonce = fin.read(metadata['nonce_len'])
+
                 ConsoleLogger.show('debug', f"Read salt ({len(salt)} bytes) and nonce ({len(nonce)} bytes)")
                 key = self._derive_key(password, salt)
                 ConsoleLogger.show('debug', "Initializing AES-GCM cipher for decryption")
                 cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-                
-                ciphertext_len = file_size - header_size - footer_size
+
+                ciphertext_len = file_size - metadata['header_len'] - metadata['salt_len'] - metadata['nonce_len'] - metadata['tag_len']
                 ConsoleLogger.show('debug', f"Ciphertext length to decrypt: {self._format_size(ciphertext_len)}")
-                
-                with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc="[🔓] Decrypting") as pbar:
-                    decompressor = zlib.decompressobj() if compress else None
+
+                desc = "[🔓] Decrypting & Decompressing" if effective_compress else "[🔓] Decrypting"
+                with open(output_path, 'wb') as fout, tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc=desc) as pbar:
+                    decompressor = zlib.decompressobj() if effective_compress else None
                     bytes_read = 0
 
                     while bytes_read < ciphertext_len:
@@ -396,7 +536,7 @@ class CryptoEngine:
                         fout.write(decompressor.flush())
 
                 # Verify Tag (always, regardless of bytes_read)
-                tag = fin.read(Config.TAG_SIZE)
+                tag = fin.read(metadata['tag_len'])
                 ConsoleLogger.show('debug', f"Read authentication tag ({len(tag)} bytes)")
                 try:
                     ConsoleLogger.show('debug', "Verifying authentication tag")
@@ -409,8 +549,6 @@ class CryptoEngine:
                     return False
 
             ConsoleLogger.show('success', "Integrity Verified. Decryption successful.")
-            # Log decryption progress completion
-            ConsoleLogger.show('info', f"Decrypting: {self._format_size(file_size)} decrypted successfully", icon='🔓')
             return True
 
         except Exception as e:
@@ -421,24 +559,434 @@ class CryptoEngine:
                 except: pass
             return False
 
+    def inspect_file(self, input_path: str) -> dict:
+        if not os.path.isfile(input_path):
+            raise FileNotFoundError(input_path)
+
+        file_size = os.path.getsize(input_path)
+        with open(input_path, 'rb') as fin:
+            prefix = fin.read(Config.FIXED_HEADER_SIZE)
+
+        if len(prefix) < Config.FIXED_HEADER_SIZE:
+            raise ValueError("File is too small to inspect")
+
+        if prefix[:4] != Config.MAGIC:
+            raise ValueError("Unrecognized file format. Only CT02 encrypted files can be inspected reliably.")
+
+        metadata = _parse_format_from_bytes(prefix, text_payload=False)
+        if len(prefix) < metadata['header_len']:
+            with open(input_path, 'rb') as fin:
+                prefix = fin.read(metadata['header_len'])
+            metadata = _parse_ct02_header_from_bytes(prefix)
+
+        ciphertext_size = file_size - metadata['header_len'] - metadata['salt_len'] - metadata['nonce_len'] - metadata['tag_len']
+        if ciphertext_size < 0:
+            raise ValueError("Invalid encrypted file structure")
+
+        return {
+            'format': metadata['format'],
+            'version': metadata['version'],
+            'legacy': metadata['is_legacy'],
+            'compression': 'enabled' if metadata['compress'] else ('unknown' if metadata['compress'] is None else 'disabled'),
+            'kdf': 'PBKDF2-SHA256' if metadata['kdf_id'] == Config.KDF_PBKDF2 else f"unknown({metadata['kdf_id']})",
+            'iterations': metadata['iterations'],
+            'salt_length': metadata['salt_len'],
+            'nonce_length': metadata['nonce_len'],
+            'tag_length': metadata['tag_len'],
+            'header_length': metadata['header_len'],
+            'file_size': file_size,
+            'ciphertext_size': max(ciphertext_size, 0),
+        }
+
+# =========================
+# Password Strength Validator
+# =========================
+
+class PasswordStrength:
+    """Password strength validator with real-time feedback."""
+    
+    STRENGTHS = {
+        'VERY_WEAK': {'label': 'Very Weak', 'color': '\033[91m\033[1m', 'reset': '\033[0m', 'icon': '❌'},  # Red Bold
+        'WEAK': {'label': 'Weak', 'color': '\033[91m', 'reset': '\033[0m', 'icon': '⚠️'},                   # Red
+        'MEDIUM': {'label': 'Medium', 'color': '\033[93m', 'reset': '\033[0m', 'icon': '⚡'},                # Yellow
+        'STRONG': {'label': 'Strong', 'color': '\033[92m', 'reset': '\033[0m', 'icon': '✅'},                # Green
+        'VERY_STRONG': {'label': 'Very Strong', 'color': '\033[92m\033[1m', 'reset': '\033[0m', 'icon': '🔒'} # Green Bold
+    }
+    
+    @classmethod
+    def check(cls, password: str) -> dict:
+        """Check password strength and return detailed results."""
+        has_lower = bool(re.search(r'[a-z]', password))
+        has_upper = bool(re.search(r'[A-Z]', password))
+        has_number = bool(re.search(r'[0-9]', password))
+        has_symbol = bool(re.search(r'[^a-zA-Z0-9]', password))
+        length = len(password)
+        
+        score = 0
+        
+        # Length scoring
+        if length >= 8:
+            score += 1
+        if length >= 12:
+            score += 1
+        if length >= 16:
+            score += 1
+        
+        # Character type scoring
+        if has_lower:
+            score += 1
+        if has_upper:
+            score += 1
+        if has_number:
+            score += 1
+        if has_symbol:
+            score += 1
+        
+        # Determine strength
+        if score <= 2 or length < 6:
+            strength = 'VERY_WEAK'
+        elif score <= 3 or length < 8:
+            strength = 'WEAK'
+        elif score <= 5:
+            strength = 'MEDIUM'
+        elif score <= 6:
+            strength = 'STRONG'
+        else:
+            strength = 'VERY_STRONG'
+        
+        return {
+            'score': score,
+            'strength': strength,
+            'has_lower': has_lower,
+            'has_upper': has_upper,
+            'has_number': has_number,
+            'has_symbol': has_symbol,
+            'length': length
+        }
+    
+    @classmethod
+    def get_indicator(cls, password: str) -> str:
+        """Get formatted strength indicator with colors."""
+        result = cls.check(password)
+        strength = cls.STRENGTHS[result['strength']]
+        return f"{strength['color']}{strength['icon']} {strength['label']}{strength['reset']}"
+    
+    @classmethod
+    def get_char_types(cls, password: str) -> str:
+        """Get formatted character types present in password."""
+        result = cls.check(password)
+        types = []
+        check_icon = '✓'
+        cross_icon = '✗'
+        green = TerminalColors.Foreground.GREEN
+        red = TerminalColors.Foreground.RED
+        reset = TerminalColors.RESET
+        
+        if result['has_lower']:
+            types.append(f"{green}{check_icon} Lower{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Lower{reset}")
+        
+        if result['has_upper']:
+            types.append(f"{green}{check_icon} Upper{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Upper{reset}")
+        
+        if result['has_number']:
+            types.append(f"{green}{check_icon} Number{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Number{reset}")
+        
+        if result['has_symbol']:
+            types.append(f"{green}{check_icon} Symbol{reset}")
+        else:
+            types.append(f"{red}{cross_icon} Symbol{reset}")
+        
+        return ' '.join(types)
+
+
+def getpass_with_strength(prompt: str = "Enter Password: ") -> str:
+    """Get password with real-time strength indicator."""
+    import sys
+    
+    # Fallback for non-interactive stdin (e.g., tests/CI).
+    if not sys.stdin.isatty():
+        return getpass.getpass(prompt)
+    
+    # Write prompt
+    white = TerminalColors.Foreground.WHITE
+    reset = TerminalColors.RESET
+    sys.stdout.write(f"{white}[{reset}🔑{white}]{reset} {prompt}")
+    sys.stdout.flush()
+    
+    # Hide cursor
+    sys.stdout.write('\033[?25l')
+    sys.stdout.flush()
+    
+    password = ''
+    
+    # Check if running on Windows
+    if sys.platform == 'win32':
+        import msvcrt
+        
+        while True:
+            char = msvcrt.getch().decode('utf-8', errors='ignore')
+            
+            if char == '\r' or char == '\n':
+                # Enter pressed - show cursor and newline
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                break
+            elif char == '\x03':
+                # Ctrl+C - show cursor
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                sys.exit(0)
+            elif char == '\x00' or char == '\xe0':
+                # Special key prefix, read next char
+                char2 = msvcrt.getch().decode('utf-8', errors='ignore')
+                if char2 == 'H':  # Up arrow
+                    pass
+                elif char2 == 'P':  # Down arrow
+                    pass
+                elif char2 == 'K':  # Left arrow
+                    pass
+                elif char2 == 'M':  # Right arrow
+                    pass
+                elif char2 == '\x53':  # Delete
+                    pass
+            elif char == '\b' or char == '\x08':
+                # Backspace
+                if password:
+                    password = password[:-1]
+                    # Clear line and rewrite
+                    strength_indicator = PasswordStrength.get_indicator(password)
+                    char_types = PasswordStrength.get_char_types(password)
+                    asterisks = '*' * len(password)
+                    sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+            elif char >= ' ' and len(char) == 1:
+                # Regular character
+                password += char
+                # Update display with strength indicator
+                strength_indicator = PasswordStrength.get_indicator(password)
+                char_types = PasswordStrength.get_char_types(password)
+                asterisks = '*' * len(password)
+                sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                sys.stdout.flush()
+    else:
+        # Unix/Linux/Mac - use termios
+        import tty
+        import termios
+        
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+        
+        try:
+            tty.setraw(fd)
+            
+            while True:
+                char = sys.stdin.read(1)
+                
+                if char == '\r' or char == '\n':
+                    # Enter pressed - show cursor
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x03':
+                    # Ctrl+C - show cursor
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    sys.exit(0)
+                elif char == '\x04':
+                    # Ctrl+D - show cursor
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x7f' or char == '\b':
+                    # Backspace
+                    if password:
+                        password = password[:-1]
+                        # Clear line and rewrite
+                        strength_indicator = PasswordStrength.get_indicator(password)
+                        char_types = PasswordStrength.get_char_types(password)
+                        asterisks = '*' * len(password)
+                        sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                        sys.stdout.flush()
+                elif char >= ' ' and len(char) == 1:
+                    # Regular character
+                    password += char
+                    # Update display with strength indicator
+                    strength_indicator = PasswordStrength.get_indicator(password)
+                    char_types = PasswordStrength.get_char_types(password)
+                    asterisks = '*' * len(password)
+                    sys.stdout.write(f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+    
+    return password
+
+
+def getpass_verify_with_strength(prompt1: str = "Enter Password: ", prompt2: str = "Verify Password: ") -> str:
+    """Get password with verification and strength indicator."""
+    # Fallback for non-interactive stdin (e.g., tests/CI).
+    if not sys.stdin.isatty():
+        password = getpass.getpass(prompt1)
+        if not password:
+            ConsoleLogger.show('error', 'Password cannot be empty.')
+            ConsoleLogger.show('error', 'Operation aborted: No password provided')
+            sys.exit(1)
+        password2 = getpass.getpass(prompt2)
+        if password != password2:
+            ConsoleLogger.show('error', 'Passwords do not match!')
+            ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
+            sys.exit(1)
+        return password
+
+    password = getpass_with_strength(prompt1)
+    if not password:
+        ConsoleLogger.show('error', 'Password cannot be empty.')
+        ConsoleLogger.show('error', 'Operation aborted: No password provided')
+        sys.exit(1)
+
+    ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
+
+    white = TerminalColors.Foreground.WHITE
+    reset = TerminalColors.RESET
+    sys.stdout.write(f"{white}[{reset}🔄{white}]{reset} {prompt2}")
+    sys.stdout.flush()
+
+    # Hide cursor
+    sys.stdout.write('\033[?25l')
+    sys.stdout.flush()
+
+    password2 = ''
+
+    # Check if running on Windows
+    if sys.platform == 'win32':
+        import msvcrt
+
+        while True:
+            char = msvcrt.getch().decode('utf-8', errors='ignore')
+
+            if char == '\r' or char == '\n':
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                break
+            elif char == '\x03':
+                sys.stdout.write('\033[?25h\n')
+                sys.stdout.flush()
+                sys.exit(0)
+            elif char == '\x00' or char == '\xe0':
+                char2 = msvcrt.getch().decode('utf-8', errors='ignore')
+                if char2 == 'H':  # Up arrow
+                    pass
+                elif char2 == 'P':  # Down arrow
+                    pass
+                elif char2 == 'K':  # Left arrow
+                    pass
+                elif char2 == 'M':  # Right arrow
+                    pass
+                elif char2 == '\x53':  # Delete
+                    pass
+            elif char == '\b' or char == '\x08':
+                if password2:
+                    password2 = password2[:-1]
+                    strength_indicator = PasswordStrength.get_indicator(password2)
+                    char_types = PasswordStrength.get_char_types(password2)
+                    asterisks = '*' * len(password2)
+                    sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+            elif char >= ' ' and len(char) == 1:
+                password2 += char
+                strength_indicator = PasswordStrength.get_indicator(password2)
+                char_types = PasswordStrength.get_char_types(password2)
+                asterisks = '*' * len(password2)
+                sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                sys.stdout.flush()
+    else:
+        # Unix/Linux/Mac - use termios
+        import tty
+        import termios
+
+        fd = sys.stdin.fileno()
+        old_settings = termios.tcgetattr(fd)
+
+        try:
+            tty.setraw(fd)
+
+            while True:
+                char = sys.stdin.read(1)
+
+                if char == '\r' or char == '\n':
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x03':
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+                    sys.exit(0)
+                elif char == '\x04':
+                    sys.stdout.write('\033[?25h\n')
+                    sys.stdout.flush()
+                    break
+                elif char == '\x7f' or char == '\b':
+                    if password2:
+                        password2 = password2[:-1]
+                        strength_indicator = PasswordStrength.get_indicator(password2)
+                        char_types = PasswordStrength.get_char_types(password2)
+                        asterisks = '*' * len(password2)
+                        sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                        sys.stdout.flush()
+                elif char >= ' ' and len(char) == 1:
+                    password2 += char
+                    strength_indicator = PasswordStrength.get_indicator(password2)
+                    char_types = PasswordStrength.get_char_types(password2)
+                    asterisks = '*' * len(password2)
+                    sys.stdout.write(f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K')
+                    sys.stdout.flush()
+        finally:
+            termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+    if password != password2:
+        ConsoleLogger.show('error', 'Passwords do not match!')
+        ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
+        sys.exit(1)
+
+    return password
+
+
 # =========================
 # CLI Logic
 # =========================
 
 def parse_args(argv=None):
-    parser = argparse.ArgumentParser(description=Config.DESCRIPTION)
+    parser = argparse.ArgumentParser(
+        description=Config.DESCRIPTION,
+        epilog=(
+            "Notes:\n"
+            "  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively\n"
+            "    (equivalent to .\\temp\\**\\*.txt).\n"
+            "  - Password prompts show a live strength indicator."
+        ),
+        formatter_class=argparse.RawTextHelpFormatter,
+    )
     mode_group = parser.add_mutually_exclusive_group()
     mode_group.add_argument('-e', '--encrypt', action='store_true', help='Encrypt mode (default)')
     mode_group.add_argument('-d', '--decrypt', action='store_true', help='Decrypt mode')
+    mode_group.add_argument('--inspect', action='store_true', help='Inspect encrypted file metadata')
 
     group = parser.add_mutually_exclusive_group(required=True)
     group.add_argument('-t', '--text', help='Text to process')
-    group.add_argument('-f', '--file', help='File path to process')
+    group.add_argument('-f', '--file', help='File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
     
     parser.add_argument('-o', '--output', help='Output file path')
-    parser.add_argument('-p', '--password', required=False, help='Password (optional, will prompt if missing)')
+    parser.add_argument('-p', '--password', required=False, help='Password (optional; prompt includes strength indicator)')
     parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
-    parser.add_argument('-r', '--recursive', action='store_true', help='Recursively process directories')
+    parser.add_argument('-r', '--recursive', action='store_true', help='Recursively process directories or wildcard patterns (uses ** for subfolders)')
     parser.add_argument('--debug', action='store_true', help='Enable debug mode')
     parser.add_argument('--log', action='store_true', help='Enable logging to file')
     parser.add_argument('-v', '--version', action='version', version=Config.VERSION)
@@ -451,6 +999,10 @@ def main(argv=None):
     # If argv is passed (from tests), it uses that list.
     args = parse_args(argv)
     engine = CryptoEngine()
+
+    if args.inspect and args.text:
+        ConsoleLogger.show('error', '--inspect only supports --file input')
+        sys.exit(1)
 
     # Enable logging FIRST if --log flag is set
     if args.log:
@@ -472,42 +1024,112 @@ def main(argv=None):
         ConsoleLogger.show('info', f"Log file: {ConsoleLogger.LOG_FILE}")
         ConsoleLogger.show('info', "Logging to file: Enabled")
 
-    # Secure Password Input
-    if not args.password:
-        ConsoleLogger.show('info', "Enter Password: ", icon='🔑', log_file=False)
-        args.password = getpass.getpass()
-        ConsoleLogger.show('info', "Password entered by user", icon='🔑')
-        if not args.password:
-             ConsoleLogger.show('error', "Password cannot be empty.")
-             ConsoleLogger.show('error', "Operation aborted: No password provided")
-             sys.exit(1)
-
-        # Verify password if encrypting
-        if not args.decrypt:
-            ConsoleLogger.show('debug', "Prompting for verification password")
-            ConsoleLogger.show('info', "Verify Password: ", icon='🔄', log_file=False)
-            verify_pass = getpass.getpass()
-            ConsoleLogger.show('info', "Password verification entered", icon='🔄')
-            if args.password != verify_pass:
-                ConsoleLogger.show('error', "Passwords do not match!")
-                ConsoleLogger.show('error', "Operation aborted due to password mismatch")
+    file_list = None
+    if args.file:
+        has_wildcard = any(ch in args.file for ch in ['*', '?', '[', ']'])
+        if has_wildcard:
+            if args.recursive:
+                if '**' in args.file:
+                    pattern = args.file
+                else:
+                    dir_part = os.path.dirname(args.file)
+                    base_part = os.path.basename(args.file)
+                    if dir_part in ['', '.']:
+                        pattern = os.path.join('**', base_part)
+                    else:
+                        pattern = os.path.join(dir_part, '**', base_part)
+                file_list = glob.glob(pattern, recursive=True)
+            else:
+                file_list = glob.glob(args.file, recursive=False)
+            file_list = [f for f in file_list if os.path.isfile(f)]
+            if not file_list:
+                ConsoleLogger.show('error', f"No files matched pattern: {args.file}")
+                ConsoleLogger.show('error', "Operation failed: No matching files")
                 sys.exit(1)
-    else:
-        ConsoleLogger.show('debug', "Password provided via command line")
+        else:
+            file_list = [args.file]
+
+    if args.inspect and args.file:
+        target = file_list[0] if file_list else args.file
+        try:
+            details = engine.inspect_file(target)
+        except FileNotFoundError:
+            ConsoleLogger.show('error', f"File not found: {target}")
+            ConsoleLogger.show('error', "Operation failed: File does not exist")
+            sys.exit(1)
+        except ValueError as exc:
+            ConsoleLogger.show('error', f"Inspect failed: {exc}")
+            ConsoleLogger.show('error', f"File is not a supported encrypted file: {target}")
+            sys.exit(1)
+
+        ConsoleLogger.show('info', f"Format: {details['format']}", icon='🔍')
+        ConsoleLogger.show('info', f"Version: {details['version']}", icon='📜')
+        ConsoleLogger.show('info', f"Legacy: {'yes' if details['legacy'] else 'no'}", icon='🕰️')
+        ConsoleLogger.show('info', f"Compression: {details['compression']}", icon='🗜️')
+        ConsoleLogger.show('info', f"KDF: {details['kdf']}", icon='🧬')
+        ConsoleLogger.show('info', f"Iterations: {details['iterations']}", icon='🔁')
+        ConsoleLogger.show('info', f"Salt length: {details['salt_length']}", icon='🧂')
+        ConsoleLogger.show('info', f"Nonce length: {details['nonce_length']}", icon='🎲')
+        ConsoleLogger.show('info', f"Tag length: {details['tag_length']}", icon='🏷️')
+        ConsoleLogger.show('info', f"Header length: {details['header_length']}", icon='🧱')
+        ConsoleLogger.show('info', f"File size: {details['file_size']} bytes", icon='📦')
+        ConsoleLogger.show('info', f"Ciphertext size: {details['ciphertext_size']} bytes", icon='🔐')
+        end_timestamp = time.strftime("%Y-%m-%d %H:%M:%S")
+        ConsoleLogger.show('info', f"Session ended at {end_timestamp}", icon='🏁')
+        if ConsoleLogger.LOG_ENABLED:
+            ConsoleLogger.show('info', "="*80, show_console=False, log_file=True)
+        return
 
     if args.text:
-        # Display formatted status with emojis for text mode
         mode_str = "decrypt" if args.decrypt else "encrypt"
         compression_str = "disabled"  # Compression not available for text mode
-        lock_emoji = "🔓" if args.decrypt else "🔐"
-        green = TerminalColors.Foreground.GREEN
-        blue = TerminalColors.Foreground.BLUE
-
         ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
         ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
         ConsoleLogger.show('info', "Processing text...", icon='💬')
         ConsoleLogger.show('info', f"Input text length: {len(args.text)} characters", log_file=False)
+    elif args.file:
+        ConsoleLogger.show('debug', f"File specified: {args.file}")
+        if not os.path.exists(args.file) and not any(ch in args.file for ch in ['*', '?', '[', ']']):
+            ConsoleLogger.show('error', f"File not found: {args.file}")
+            ConsoleLogger.show('error', "Operation failed: File does not exist")
+            ConsoleLogger.show('error', "Please check the file path and try again")
+            sys.exit(1)
 
+        is_dir = os.path.isdir(args.file)
+        if is_dir and not args.recursive:
+            ConsoleLogger.show('error', "Path is a directory. Use -r/--recursive to process directories.")
+            ConsoleLogger.show('error', "Operation aborted: Directory specified without --recursive flag")
+            sys.exit(1)
+
+        mode_str = "decrypt" if args.decrypt else "encrypt"
+        compression_str = "enabled" if args.compress else "disabled"
+        ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
+        ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
+        if is_dir and args.recursive:
+            ConsoleLogger.show('info', f"Processing directory: {args.file}", icon='📁')
+            ConsoleLogger.show('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {args.file}", icon='🔒' if not args.decrypt else '🔓')
+            ConsoleLogger.show('info', "Recursive mode: enabled", icon='🔄')
+        elif not is_dir:
+            if file_list and len(file_list) > 1:
+                ConsoleLogger.show('info', f"Processing files: {len(file_list)}", icon='📄')
+            else:
+                target = file_list[0] if file_list else args.file
+                input_size = os.path.getsize(target)
+                ConsoleLogger.show('info', f"Processing file: {target} ({engine._format_size(input_size)})", icon='📄')
+
+    # Secure Password Input with Strength Indicator
+    if not args.inspect and not args.password:
+        # Only verify password when encrypting (not needed for decrypting)
+        if not args.decrypt:
+            args.password = getpass_verify_with_strength()
+            ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
+        else:
+            args.password = getpass_with_strength()
+            ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
+    elif not args.inspect:
+        ConsoleLogger.show('debug', "Password provided via command line")
+
+    if args.text:
         start_time = time.time()
 
         # Default to encrypt if decrypt is not explicitly set
@@ -523,24 +1145,18 @@ def main(argv=None):
             ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
         else:
             ConsoleLogger.show('info', "Decrypting text...")
-            try:
-                ConsoleLogger.show('debug', "Decoding Base64 text input")
-                raw_data = base64.b64decode(args.text)
-                result = engine.decrypt_data(raw_data, args.password)
-                if result:
-                    ConsoleLogger.show('success', f"Decrypted: {result.decode('utf-8')}", log_file=False)
-                    elapsed_time = time.time() - start_time
-                    ConsoleLogger.show('info', f"Output decrypted text length: {len(result)} characters", log_file=False)
-                    ConsoleLogger.show('success', "Decryption completed successfully", icon='✅')
-                    ConsoleLogger.show('info', f"Operations completed: 1/1", icon='✔️')
-                    ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
-            except Exception as e:
-                ConsoleLogger.show('error', f"Failed: {e}")
-                ConsoleLogger.show('error', "Operation failed: Decryption error")
+            ConsoleLogger.show('debug', "Decoding Base64 text input")
+            raw_data = base64.b64decode(args.text)
+            result = engine.decrypt_data(raw_data, args.password)
+            if result:
+                ConsoleLogger.show('success', f"Decrypted: {result.decode('utf-8')}", log_file=False)
+                elapsed_time = time.time() - start_time
+                ConsoleLogger.show('info', f"Output decrypted text length: {len(result)} characters", log_file=False)
+                ConsoleLogger.show('success', "Decryption completed successfully", icon='✅')
+                ConsoleLogger.show('info', f"Operations completed: 1/1", icon='✔️')
+                ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
 
     elif args.file:
-        ConsoleLogger.show('debug', f"File specified: {args.file}")
-
         # Recursive Directory Processing
         if args.recursive and os.path.isdir(args.file):
             input_dir = args.file
@@ -551,12 +1167,7 @@ def main(argv=None):
             yellow = TerminalColors.Foreground.YELLOW
             blue = TerminalColors.Foreground.BLUE
 
-            ConsoleLogger.show('info', f"Processing directory: {input_dir}", icon='📁')
             ConsoleLogger.show('debug', "Recursive mode enabled")
-            ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
-            ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
-            ConsoleLogger.show('info', f"{'Encrypting' if not args.decrypt else 'Decrypting'} directory: {input_dir}", icon='🔒' if not args.decrypt else '🔓')
-            ConsoleLogger.show('info', "Recursive mode: enabled", icon='🔄')
 
             success_count = 0
             fail_count = 0
@@ -608,44 +1219,40 @@ def main(argv=None):
             ConsoleLogger.show('info', f"Operations completed: {success_count}/{total_ops}", icon='✔️')
             ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
 
-        elif os.path.exists(args.file):
-            if os.path.isdir(args.file):
-                 ConsoleLogger.show('error', f"Path is a directory. Use -r/--recursive to process directories.")
-                 ConsoleLogger.show('error', "Operation aborted: Directory specified without --recursive flag")
-                 sys.exit(1)
-
-            default_ext = '.enc' if not args.decrypt else '.dec'
-            output_file = args.output or (os.path.splitext(args.file)[0] + default_ext)
-
-            # Display formatted status with emojis
-            mode_str = "decrypt" if args.decrypt else "encrypt"
-            compression_str = "enabled" if args.compress else "disabled"
-            lock_emoji = "🔓" if args.decrypt else "🔐"
-            green = TerminalColors.Foreground.GREEN
-            blue = TerminalColors.Foreground.BLUE
-
-            input_size = os.path.getsize(args.file)
-            ConsoleLogger.show('info', f"Mode: {mode_str}", icon='🔐' if not args.decrypt else '🔓')
-            ConsoleLogger.show('info', f"Compression: {compression_str}", icon='📦')
-            ConsoleLogger.show('info', f"Processing file: {args.file} ({engine._format_size(input_size)})", icon='📄')
-
+        elif os.path.exists(args.file) or (file_list and len(file_list) > 0):
+            targets = file_list if file_list else [args.file]
+            success_count = 0
+            fail_count = 0
             start_time = time.time()
 
-            if not args.decrypt:
-                success = engine.encrypt_file(args.file, output_file, args.password, args.compress)
-            else:
-                success = engine.decrypt_file(args.file, output_file, args.password, args.compress)
+            for target in targets:
+                if os.path.isdir(target):
+                    continue
+                if args.output and len(targets) == 1:
+                    output_file = args.output
+                else:
+                    if not args.decrypt:
+                        output_file = target + '.enc'
+                    else:
+                        output_file = os.path.splitext(target)[0] + '.dec'
+                ok = engine.encrypt_file(target, output_file, args.password, args.compress) if not args.decrypt else engine.decrypt_file(target, output_file, args.password, args.compress)
+                if ok:
+                    success_count += 1
+                    ConsoleLogger.show('success', f"File {'encrypted' if not args.decrypt else 'decrypted'}: {output_file} ({engine._format_size(os.path.getsize(output_file))})", icon='📄')
+                else:
+                    fail_count += 1
 
             elapsed_time = time.time() - start_time
+            total_ops = success_count + fail_count
 
-            if success:
-                # Display completion summary
-                ConsoleLogger.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
-                ConsoleLogger.show('success', f"File {'encrypted' if not args.decrypt else 'decrypted'}: {output_file} ({engine._format_size(os.path.getsize(output_file))})", icon='📄')
+            ConsoleLogger.show('success', f"{'Decryption' if args.decrypt else 'Encryption'} completed successfully", icon='✅')
+            if total_ops == 1 and success_count == 1:
                 ConsoleLogger.show('info', "Operations completed: 1/1", icon='✔️')
-                ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
             else:
-                ConsoleLogger.show('error', f"{'Decryption' if args.decrypt else 'Encryption'} failed!")
+                ConsoleLogger.show('info', f"Operations completed: {success_count}/{total_ops}", icon='✔️')
+            ConsoleLogger.show('info', f"Total time: {elapsed_time:.2f}s", icon='⏱️')
+
+            if fail_count > 0:
                 sys.exit(1)
         else:
             ConsoleLogger.show('error', f"File not found: {args.file}")
