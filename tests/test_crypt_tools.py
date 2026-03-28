@@ -934,7 +934,9 @@ def test_recursive_encrypt_fail_count(monkeypatch, tmp_path):
 	password = 'pw'
 	(tmp_path / 'a.txt').write_text('a')
 	monkeypatch.setattr(
-		crypt_tools.CryptoEngine, 'encrypt_file', lambda self, i, o, p, compress=False: False
+		crypt_tools.CryptoEngine,
+		'encrypt_file',
+		lambda self, i, o, p, compress=False, keyfile_data=None: False,
 	)
 	main(['--encrypt', '-r', '-f', str(tmp_path), '-p', password])
 
@@ -943,7 +945,9 @@ def test_recursive_decrypt_no_ext_file(monkeypatch, tmp_path):
 	password = 'pw'
 	(tmp_path / '.enc').write_text('not_encrypted')
 	monkeypatch.setattr(
-		crypt_tools.CryptoEngine, 'decrypt_file', lambda self, i, o, p, compress=False: False
+		crypt_tools.CryptoEngine,
+		'decrypt_file',
+		lambda self, i, o, p, compress=False, keyfile_data=None: False,
 	)
 	main(['--decrypt', '-r', '-f', str(tmp_path), '-p', password])
 
@@ -962,7 +966,9 @@ def test_non_recursive_fail_exit(monkeypatch, tmp_path):
 	infile = tmp_path / 'a.txt'
 	infile.write_text('data')
 	monkeypatch.setattr(
-		crypt_tools.CryptoEngine, 'encrypt_file', lambda self, i, o, p, compress=False: False
+		crypt_tools.CryptoEngine,
+		'encrypt_file',
+		lambda self, i, o, p, compress=False, keyfile_data=None: False,
 	)
 	with pytest.raises(SystemExit):
 		main(['--encrypt', '-f', str(infile), '-p', password])
@@ -1110,3 +1116,252 @@ def test_decrypt_file_error_handling(engine, monkeypatch):
 			os.remove(tmpfile)
 		if os.path.exists('out.dec'):
 			os.remove('out.dec')
+
+
+def test_generate_keyfile(tmp_path):
+	from crypt_tools import generate_keyfile
+
+	keyfile_path = tmp_path / 'test_key.bin'
+	result = generate_keyfile(str(keyfile_path))
+	assert result is True
+	assert keyfile_path.exists()
+	assert keyfile_path.stat().st_size == 32  # 256 bits = 32 bytes
+
+
+def test_read_keyfile(tmp_path):
+	from crypt_tools import read_keyfile, generate_keyfile
+
+	# Generate a keyfile
+	keyfile_path = tmp_path / 'test_key.bin'
+	generate_keyfile(str(keyfile_path))
+
+	# Read it back
+	key_data = read_keyfile(str(keyfile_path))
+	assert key_data is not None
+	assert len(key_data) == 32
+
+
+def test_read_keyfile_not_found():
+	from crypt_tools import read_keyfile
+
+	result = read_keyfile('nonexistent_keyfile.bin')
+	assert result is None
+
+
+def test_read_keyfile_too_small(tmp_path):
+	from crypt_tools import read_keyfile
+
+	small_key = tmp_path / 'small_key.bin'
+	small_key.write_bytes(b'short')  # Less than 16 bytes
+
+	result = read_keyfile(str(small_key))
+	assert result is None
+
+
+def test_combine_password_and_keyfile():
+	from crypt_tools import combine_password_and_keyfile
+
+	password = 'testpassword'
+	keyfile_data = b'keyfiledata12345678'
+
+	result = combine_password_and_keyfile(password, keyfile_data)
+	assert isinstance(result, str)
+	assert len(result) == 64  # SHA256 hex = 64 chars
+
+
+def test_encrypt_decrypt_with_keyfile(tmp_path):
+	from crypt_tools import (
+		generate_keyfile,
+		read_keyfile,
+		CryptoEngine,
+	)
+
+	password = 'mypassword'
+	keyfile_path = tmp_path / 'key.bin'
+	input_file = tmp_path / 'plain.txt'
+	encrypted_file = tmp_path / 'plain.txt.enc'
+	decrypted_file = tmp_path / 'plain.txt.dec'
+
+	# Generate keyfile
+	generate_keyfile(str(keyfile_path))
+
+	# Create input file
+	input_file.write_text('Secret message for keyfile test')
+
+	# Read keyfile
+	keyfile_data = read_keyfile(str(keyfile_path))
+
+	# Encrypt with keyfile
+	engine = CryptoEngine()
+	result = engine.encrypt_file(
+		str(input_file), str(encrypted_file), password, False, keyfile_data
+	)
+	assert result is True
+	assert encrypted_file.exists()
+
+	# Decrypt with keyfile
+	result = engine.decrypt_file(
+		str(encrypted_file), str(decrypted_file), password, False, keyfile_data
+	)
+	assert result is True
+	assert decrypted_file.exists()
+	assert decrypted_file.read_text() == 'Secret message for keyfile test'
+
+
+def test_encrypt_decrypt_keyfile_only(tmp_path):
+	from crypt_tools import (
+		generate_keyfile,
+		read_keyfile,
+		CryptoEngine,
+	)
+
+	keyfile_path = tmp_path / 'key.bin'
+	input_file = tmp_path / 'plain.txt'
+	encrypted_file = tmp_path / 'plain.txt.enc'
+	decrypted_file = tmp_path / 'plain.txt.dec'
+
+	# Generate keyfile
+	generate_keyfile(str(keyfile_path))
+
+	# Create input file
+	input_file.write_text('Message encrypted with keyfile only')
+
+	# Read keyfile
+	keyfile_data = read_keyfile(str(keyfile_path))
+
+	# Encrypt with empty password but with keyfile
+	engine = CryptoEngine()
+	result = engine.encrypt_file(str(input_file), str(encrypted_file), '', False, keyfile_data)
+	assert result is True
+
+	# Decrypt with keyfile
+	result = engine.decrypt_file(str(encrypted_file), str(decrypted_file), '', False, keyfile_data)
+	assert result is True
+	assert decrypted_file.exists()
+	assert decrypted_file.read_text() == 'Message encrypted with keyfile only'
+
+
+def test_encrypt_data_with_keyfile():
+	from crypt_tools import (
+		generate_keyfile,
+		read_keyfile,
+		CryptoEngine,
+	)
+
+	password = 'testpassword'
+
+	# Create a temporary keyfile
+	import tempfile
+
+	fd, keyfile_path = tempfile.mkstemp()
+	os.close(fd)
+	try:
+		generate_keyfile(keyfile_path)
+		keyfile_data = read_keyfile(keyfile_path)
+
+		engine = CryptoEngine()
+		data = b'Hello World with keyfile!'
+
+		# Encrypt
+		encrypted = engine.encrypt_data(data, password, keyfile_data)
+
+		# Decrypt
+		decrypted = engine.decrypt_data(encrypted, password, keyfile_data)
+		assert decrypted == data
+	finally:
+		os.remove(keyfile_path)
+
+
+def test_cli_generate_keyfile(tmp_path):
+	keyfile_path = tmp_path / 'new_key.bin'
+	with pytest.raises(SystemExit):
+		main(['--generate-keyfile', str(keyfile_path)])
+	assert keyfile_path.exists()
+	assert keyfile_path.stat().st_size == 32
+
+
+def test_cli_encrypt_with_keyfile(tmp_path):
+	from crypt_tools import generate_keyfile
+
+	password = 'testpass'
+	keyfile_path = tmp_path / 'key.bin'
+	input_file = tmp_path / 'test.txt'
+	encrypted_file = tmp_path / 'test.txt.enc'
+
+	generate_keyfile(str(keyfile_path))
+	input_file.write_text('Test content')
+
+	main(
+		[
+			'--encrypt',
+			'-f',
+			str(input_file),
+			'--keyfile',
+			str(keyfile_path),
+			'-p',
+			password,
+		]
+	)
+
+	assert encrypted_file.exists()
+
+
+def test_cli_decrypt_with_keyfile(tmp_path):
+	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
+
+	password = 'testpass'
+	keyfile_path = tmp_path / 'key.bin'
+	input_file = tmp_path / 'test.txt'
+	encrypted_file = tmp_path / 'test.txt.enc'
+	decrypted_file = tmp_path / 'test.txt.dec'
+
+	generate_keyfile(str(keyfile_path))
+	input_file.write_text('Test content for decrypt')
+
+	# First encrypt
+	keyfile_data = read_keyfile(str(keyfile_path))
+	engine = CryptoEngine()
+	engine.encrypt_file(str(input_file), str(encrypted_file), password, False, keyfile_data)
+
+	# Then decrypt via CLI
+	main(
+		[
+			'--decrypt',
+			'-f',
+			str(encrypted_file),
+			'--keyfile',
+			str(keyfile_path),
+			'-p',
+			password,
+		]
+	)
+
+	assert decrypted_file.exists()
+	assert decrypted_file.read_text() == 'Test content for decrypt'
+
+
+def test_inspect_file_shows_keyfile(tmp_path):
+	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
+
+	password = 'testpass'
+	keyfile_path = tmp_path / 'key.bin'
+	input_file = tmp_path / 'test.txt'
+	encrypted_file = tmp_path / 'test.txt.enc'
+
+	generate_keyfile(str(keyfile_path))
+	input_file.write_text('Test')
+	keyfile_data = read_keyfile(str(keyfile_path))
+
+	engine = CryptoEngine()
+	engine.encrypt_file(str(input_file), str(encrypted_file), password, False, keyfile_data)
+
+	# Inspect the file
+	details = engine.inspect_file(str(encrypted_file))
+	assert details['keyfile'] == 'enabled'
+
+
+def test_read_keyfile_missing():
+	import crypt_tools
+
+	result = crypt_tools.read_keyfile('nonexistent_file.bin')
+	assert result is None

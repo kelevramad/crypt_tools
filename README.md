@@ -16,6 +16,7 @@
 - **Password Strength Indicator**: Live strength and character-class feedback during input.
 - **Versioned File Format (`CT02`)**: New encrypted files include embedded metadata such as format version, compression flag, and KDF parameters.
 - **Inspect Mode**: View encrypted file metadata without decrypting it.
+- **Key File Support**: Generate and use key files for two-factor encryption (password + key file).
 
 ## Installation
 
@@ -106,6 +107,25 @@ uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "your_password"
 **Note (Windows/Powershell):** Quote wildcard patterns like `"*.md"` to avoid shell expansion.
 **Recursive wildcard note:** With `-r`, patterns like `.\\tests\\*.pyc` are expanded recursively (equivalent to `.\\tests\\**\\*.pyc`).
 
+### Key File Support
+Generate and use key files for two-factor encryption (password + key file):
+```bash
+# Generate a random 32-byte key file
+uv run crypt_tools.py --generate-keyfile mykey.bin
+
+# Encrypt with key file only (no password)
+uv run crypt_tools.py --encrypt -f document.txt --keyfile mykey.bin -p ""
+
+# Encrypt with password AND key file (two-factor authentication)
+uv run crypt_tools.py --encrypt -f document.txt -p "your_password" --keyfile mykey.bin
+
+# Decrypt with key file
+uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.bin -p "your_password"
+
+# Encrypt text with key file
+uv run crypt_tools.py --encrypt -t "Secret message" -p "password" --keyfile mykey.bin
+```
+
 ### CLI Arguments
 
 | Argument | Short | Description |
@@ -113,15 +133,18 @@ uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "your_password"
 | `--encrypt` | `-e` | Encrypt mode (default) |
 | `--decrypt` | `-d` | Decrypt mode |
 | `--inspect` | — | Inspect encrypted file metadata |
+| `--generate-keyfile` | — | Generate a random key file (32 bytes) |
 | `--text` | `-t` | Text to process |
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |
 | `--password` | `-p` | Password (optional, will prompt if missing) |
+| `--keyfile` | — | Key file path for encryption/decryption |
 | `--compress` | `-c` | Enable compression |
 | `--recursive` | `-r` | Recursively process directories |
 | `--log` | — | Enable logging to file (`crypt_tools.log`) |
 | `--debug` | — | Enable debug mode |
-| `--version` | `-v` | Show version |
+| `--version` | `-V` | Show version |
+| `--help` | `-h` | Show help |
 
 **Wildcard tip (Windows/Powershell):** Use quotes like `"*.md"` to pass patterns without shell expansion.
 
@@ -258,4 +281,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.1.0
+**Version**: 2.2.0

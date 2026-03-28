@@ -48,7 +48,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.1.0'
+	VERSION = '2.2.0'
 
 	# File format
 	MAGIC = b'CT02'
@@ -233,6 +233,7 @@ def _build_header(
 	*,
 	compress: bool = False,
 	is_text: bool = False,
+	use_keyfile: bool = False,
 	kdf_id: int = Config.KDF_PBKDF2,
 	iterations: int = Config.PBKDF2_ITERATIONS,
 ) -> bytes:
@@ -241,6 +242,8 @@ def _build_header(
 		flags |= Config.FLAG_COMPRESS
 	if is_text:
 		flags |= Config.FLAG_TEXT
+	if use_keyfile:
+		flags |= Config.FLAG_KEYFILE
 
 	kdf_params = _uint32_to_bytes(iterations)
 	return b''.join(
@@ -286,6 +289,7 @@ def _parse_ct02_header_from_bytes(data: bytes) -> dict:
 		'flags': flags,
 		'compress': bool(flags & Config.FLAG_COMPRESS),
 		'is_text': bool(flags & Config.FLAG_TEXT),
+		'use_keyfile': bool(flags & Config.FLAG_KEYFILE),
 		'kdf_id': kdf_id,
 		'iterations': iterations,
 		'salt_len': salt_len,
@@ -304,6 +308,7 @@ def _parse_legacy_header(*, text_payload: bool = False) -> dict:
 		'flags': 0,
 		'compress': None,
 		'is_text': text_payload,
+		'use_keyfile': False,
 		'kdf_id': Config.KDF_PBKDF2,
 		'iterations': Config.PBKDF2_ITERATIONS,
 		'salt_len': Config.SALT_SIZE,
@@ -322,6 +327,56 @@ def _parse_format_from_bytes(data: bytes, *, text_payload: bool = False) -> dict
 
 
 # =========================
+# Key File Functions
+# =========================
+
+
+def generate_keyfile(output_path: str, key_size: int = Config.KEY_SIZE) -> bool:
+	"""Generate a random key file securely."""
+	try:
+		key = os.urandom(key_size)
+		with open(output_path, 'wb') as f:
+			f.write(key)
+		ConsoleLogger.show('success', f'Key file generated: {output_path}')
+		ConsoleLogger.show('info', f'Key size: {key_size} bytes ({key_size * 8} bits)')
+		return True
+	except Exception as e:
+		ConsoleLogger.show('error', f'Failed to generate key file: {e}')
+		return False
+
+
+def read_keyfile(keyfile_path: str) -> Optional[bytes]:
+	"""Read and validate a key file."""
+	try:
+		if not os.path.exists(keyfile_path):
+			raise FileNotFoundError(f'Key file not found: {keyfile_path}')
+
+		file_size = os.path.getsize(keyfile_path)
+		if file_size < 16:
+			raise ValueError(f'Key file too small: {file_size} bytes (minimum 16)')
+
+		if file_size > 1024:
+			raise ValueError(f'Key file too large: {file_size} bytes (maximum 1024)')
+
+		with open(keyfile_path, 'rb') as f:
+			key_data = f.read()
+
+		ConsoleLogger.show('debug', f'Read key file: {keyfile_path} ({len(key_data)} bytes)')
+		return key_data
+
+	except Exception as e:
+		ConsoleLogger.show('error', f'Failed to read key file: {e}')
+		return None
+
+
+def combine_password_and_keyfile(password: str, keyfile_data: bytes) -> str:
+	"""Combine password and keyfile data for two-factor encryption."""
+	combined = password.encode('utf-8') + keyfile_data
+	hashed = hashlib.sha256(combined).digest()
+	return hashed.hex()
+
+
+# =========================
 # Core Logic (Engine)
 # =========================
 
@@ -332,14 +387,23 @@ class CryptoEngine:
 	Includes methods for key derivation, chunk processing, and file handling.
 	"""
 
-	def _derive_key(self, password: str, salt: bytes) -> bytes:
-		"""Derive a 256-bit key from password and salt using PBKDF2."""
+	def _derive_key(
+		self, password: str, salt: bytes, keyfile_data: Optional[bytes] = None
+	) -> bytes:
+		"""Derive a 256-bit key from password (and optional keyfile) and salt using PBKDF2."""
 		ConsoleLogger.show(
 			'debug', f'Deriving key with PBKDF2 ({Config.PBKDF2_ITERATIONS} iterations)'
 		)
+
+		if keyfile_data:
+			ConsoleLogger.show('debug', 'Using key file for key derivation')
+			derived_from = combine_password_and_keyfile(password, keyfile_data)
+		else:
+			derived_from = password
+
 		return hashlib.pbkdf2_hmac(
 			'sha256',
-			password.encode('utf-8'),
+			derived_from.encode('utf-8'),
 			salt,
 			Config.PBKDF2_ITERATIONS,
 			dklen=Config.KEY_SIZE,
@@ -353,7 +417,9 @@ class CryptoEngine:
 			size /= 1024
 		return f'{size:.2f}PB'
 
-	def encrypt_data(self, data: bytes, password: str) -> bytes:
+	def encrypt_data(
+		self, data: bytes, password: str, keyfile_data: Optional[bytes] = None
+	) -> bytes:
 		"""
 		Encrypt bytes in memory.
 		Format v2.2: [HEADER] + [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
@@ -361,12 +427,13 @@ class CryptoEngine:
 		ConsoleLogger.show('debug', f'Starting in-memory data encryption ({len(data)} bytes input)')
 		salt = os.urandom(Config.SALT_SIZE)
 		nonce = os.urandom(Config.NONCE_SIZE)
-		header = _build_header(is_text=True)
+		use_keyfile = keyfile_data is not None
+		header = _build_header(is_text=True, use_keyfile=use_keyfile)
 		ConsoleLogger.show(
 			'debug',
 			f'Generated salt ({Config.SALT_SIZE} bytes) and nonce ({Config.NONCE_SIZE} bytes)',
 		)
-		key = self._derive_key(password, salt)
+		key = self._derive_key(password, salt, keyfile_data)
 
 		ConsoleLogger.show('debug', 'Initializing AES-GCM cipher')
 		cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -378,7 +445,9 @@ class CryptoEngine:
 
 		return header + salt + nonce + ciphertext + tag
 
-	def decrypt_data(self, enc_data: bytes, password: str) -> Optional[bytes]:
+	def decrypt_data(
+		self, enc_data: bytes, password: str, keyfile_data: Optional[bytes] = None
+	) -> Optional[bytes]:
 		"""
 		Decrypt bytes in memory.
 		Supports:
@@ -422,7 +491,14 @@ class CryptoEngine:
 				'debug', f'Extracted salt, nonce, tag, and ciphertext ({len(ciphertext)} bytes)'
 			)
 
-			key = self._derive_key(password, salt)
+			use_keyfile = metadata.get('use_keyfile', False)
+			if use_keyfile and not keyfile_data:
+				ConsoleLogger.show(
+					'warning',
+					'Encrypted with key file but none provided. Attempting password-only decryption.',
+				)
+
+			key = self._derive_key(password, salt, keyfile_data if use_keyfile else None)
 			ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption')
 			cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
 
@@ -438,7 +514,12 @@ class CryptoEngine:
 			return None
 
 	def encrypt_file(
-		self, input_path: str, output_path: str, password: str, compress: bool = False
+		self,
+		input_path: str,
+		output_path: str,
+		password: str,
+		compress: bool = False,
+		keyfile_data: Optional[bytes] = None,
 	) -> bool:
 		"""
 		Encrypts a file using streaming (low memory usage).
@@ -454,10 +535,11 @@ class CryptoEngine:
 			)
 			salt = os.urandom(Config.SALT_SIZE)
 			nonce = os.urandom(Config.NONCE_SIZE)
-			key = self._derive_key(password, salt)
+			use_keyfile = keyfile_data is not None
+			key = self._derive_key(password, salt, keyfile_data)
 			ConsoleLogger.show('debug', 'Initializing AES-GCM cipher')
 			cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-			header = _build_header(compress=compress, is_text=False)
+			header = _build_header(compress=compress, is_text=False, use_keyfile=use_keyfile)
 
 			with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
 				# Write Header: CT02 + metadata + SALT + NONCE
@@ -510,7 +592,12 @@ class CryptoEngine:
 			return False
 
 	def decrypt_file(
-		self, input_path: str, output_path: str, password: str, compress: bool = False
+		self,
+		input_path: str,
+		output_path: str,
+		password: str,
+		compress: bool = False,
+		keyfile_data: Optional[bytes] = None,
 	) -> bool:
 		"""
 		Decrypts a file using streaming.
@@ -544,13 +631,22 @@ class CryptoEngine:
 					metadata = _parse_ct02_header_from_bytes(prefix)
 					effective_compress = metadata['compress']
 
+				use_keyfile = metadata.get('use_keyfile', False)
+
 				salt = fin.read(metadata['salt_len'])
 				nonce = fin.read(metadata['nonce_len'])
 
 				ConsoleLogger.show(
 					'debug', f'Read salt ({len(salt)} bytes) and nonce ({len(nonce)} bytes)'
 				)
-				key = self._derive_key(password, salt)
+
+				if use_keyfile and not keyfile_data:
+					ConsoleLogger.show(
+						'warning',
+						'Encrypted with key file but none provided. Attempting password-only decryption.',
+					)
+
+				key = self._derive_key(password, salt, keyfile_data if use_keyfile else None)
 				ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption')
 				cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
 
@@ -668,6 +764,7 @@ class CryptoEngine:
 			'version': metadata['version'],
 			'legacy': metadata['is_legacy'],
 			'compression': 'enabled' if metadata['compress'] else 'disabled',
+			'keyfile': 'enabled' if metadata.get('use_keyfile', False) else 'disabled',
 			'kdf': 'PBKDF2-SHA256'
 			if metadata['kdf_id'] == Config.KDF_PBKDF2
 			else f'unknown({metadata["kdf_id"]})',
@@ -1093,10 +1190,16 @@ def parse_args(argv=None):
 			'Notes:\n'
 			'  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively\n'
 			'    (equivalent to .\\temp\\**\\*.txt).\n'
-			'  - Password prompts show a live strength indicator.'
+			'  - Password prompts show a live strength indicator.\n'
+			'  - Key file support: Use --keyfile to encrypt/decrypt with a key file.\n'
+			'    Combining password + keyfile provides two-factor encryption.'
 		),
 		formatter_class=argparse.RawTextHelpFormatter,
 	)
+	parser.add_argument(
+		'--generate-keyfile', dest='generate_keyfile', help='Generate a random key file and exit'
+	)
+
 	mode_group = parser.add_mutually_exclusive_group()
 	mode_group.add_argument('-e', '--encrypt', action='store_true', help='Encrypt mode (default)')
 	mode_group.add_argument('-d', '--decrypt', action='store_true', help='Decrypt mode')
@@ -1104,7 +1207,7 @@ def parse_args(argv=None):
 		'--inspect', action='store_true', help='Inspect encrypted file metadata'
 	)
 
-	group = parser.add_mutually_exclusive_group(required=True)
+	group = parser.add_mutually_exclusive_group()
 	group.add_argument('-t', '--text', help='Text to process')
 	group.add_argument(
 		'-f',
@@ -1118,6 +1221,11 @@ def parse_args(argv=None):
 		'--password',
 		required=False,
 		help='Password (optional; prompt includes strength indicator)',
+	)
+	parser.add_argument(
+		'--keyfile',
+		required=False,
+		help='Key file path for encryption/decryption (use with or without password)',
 	)
 	parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
 	parser.add_argument(
@@ -1139,6 +1247,18 @@ def main(argv=None):
 	# If argv is passed (from tests), it uses that list.
 	args = parse_args(argv)
 	engine = CryptoEngine()
+
+	# Handle key file generation
+	if args.generate_keyfile:
+		if generate_keyfile(args.generate_keyfile):
+			sys.exit(0)
+		else:
+			sys.exit(1)
+
+	# Validate text or file is provided (required for non-generate-keyfile operations)
+	if not args.text and not args.file:
+		ConsoleLogger.show('error', 'Either --text or --file is required')
+		sys.exit(1)
 
 	if args.inspect and args.text:
 		ConsoleLogger.show('error', '--inspect only supports --file input')
@@ -1217,6 +1337,7 @@ def main(argv=None):
 		ConsoleLogger.show('info', f'Version: {details["version"]}', icon='📜')
 		ConsoleLogger.show('info', f'Legacy: {"yes" if details["legacy"] else "no"}', icon='🕰️')
 		ConsoleLogger.show('info', f'Compression: {details["compression"]}', icon='🗜️')
+		ConsoleLogger.show('info', f'Keyfile: {details.get("keyfile", "disabled")}', icon='🔑')
 		ConsoleLogger.show('info', f'KDF: {details["kdf"]}', icon='🧬')
 		ConsoleLogger.show('info', f'Iterations: {details["iterations"]}', icon='🔁')
 		ConsoleLogger.show('info', f'Salt length: {details["saltLength"]}', icon='🧂')
@@ -1340,7 +1461,8 @@ def main(argv=None):
 				)
 
 	# Secure Password Input with Strength Indicator
-	if not args.password:
+	# Only prompt for password if not provided (None), not if empty string was explicitly passed
+	if args.password is None:
 		# Only verify password when encrypting (not needed for decrypting)
 		if not args.decrypt:
 			args.password = getpass_verify_with_strength()
@@ -1351,13 +1473,26 @@ def main(argv=None):
 	else:
 		ConsoleLogger.show('debug', 'Password provided via command line')
 
+	# Handle key file
+	keyfile_data = None
+	if args.keyfile:
+		ConsoleLogger.show('info', f'Using key file: {args.keyfile}', icon='🔐')
+		keyfile_data = read_keyfile(args.keyfile)
+		if keyfile_data is None:
+			ConsoleLogger.show('error', 'Failed to read key file')
+			ConsoleLogger.show('error', 'Operation aborted: Could not load key file')
+			sys.exit(1)
+		ConsoleLogger.show('success', 'Key file loaded successfully')
+	else:
+		ConsoleLogger.show('debug', 'No key file provided')
+
 	if args.text:
 		start_time = time.time()
 
 		# Default to encrypt if decrypt is not explicitly set
 		if not args.decrypt:
 			ConsoleLogger.show('info', 'Encrypting text...')
-			result = engine.encrypt_data(args.text.encode('utf-8'), args.password)
+			result = engine.encrypt_data(args.text.encode('utf-8'), args.password, keyfile_data)
 			b64_result = base64.b64encode(result).decode('utf-8')
 			ConsoleLogger.show('success', f'Encrypted (Base64): {b64_result}')
 			elapsed_time = time.time() - start_time
@@ -1371,7 +1506,7 @@ def main(argv=None):
 			ConsoleLogger.show('info', 'Decrypting text...')
 			ConsoleLogger.show('debug', 'Decoding Base64 text input')
 			raw_data = base64.b64decode(args.text)
-			result = engine.decrypt_data(raw_data, args.password)
+			result = engine.decrypt_data(raw_data, args.password, keyfile_data)
 			if result:
 				ConsoleLogger.show(
 					'success', f'Decrypted: {result.decode("utf-8")}', log_file=False
@@ -1414,7 +1549,9 @@ def main(argv=None):
 
 						out_path = file_path + '.enc'
 						ConsoleLogger.show('info', f'Processing: {file_path}', icon='📄')
-						if engine.encrypt_file(file_path, out_path, args.password, args.compress):
+						if engine.encrypt_file(
+							file_path, out_path, args.password, args.compress, keyfile_data
+						):
 							success_count += 1
 							ConsoleLogger.show(
 								'success',
@@ -1434,7 +1571,9 @@ def main(argv=None):
 							out_path = file_path + '.dec'
 
 						ConsoleLogger.show('info', f'Processing: {file_path}', icon='📄')
-						if engine.decrypt_file(file_path, out_path, args.password, args.compress):
+						if engine.decrypt_file(
+							file_path, out_path, args.password, args.compress, keyfile_data
+						):
 							success_count += 1
 							ConsoleLogger.show(
 								'success',
@@ -1484,9 +1623,13 @@ def main(argv=None):
 					else:
 						output_file = os.path.splitext(target)[0] + '.dec'
 				ok = (
-					engine.encrypt_file(target, output_file, args.password, args.compress)
+					engine.encrypt_file(
+						target, output_file, args.password, args.compress, keyfile_data
+					)
 					if not args.decrypt
-					else engine.decrypt_file(target, output_file, args.password, args.compress)
+					else engine.decrypt_file(
+						target, output_file, args.password, args.compress, keyfile_data
+					)
 				)
 				if ok:
 					success_count += 1
