@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.2.0 |
+| **Version** | 2.3.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -271,6 +271,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.3.0 | 2026-03-27 | Version bump for development |
 | 2.2.0 | 2026-03-27 | Added Argon2id key derivation (`--kdf argon2`, `--iterations`), key file support (`--generate-keyfile`, `--keyfile`), `CT02` format header, inspect mode, and automatic compression detection for new files |
 | 2.1.0 | 2026-03-16 | Minor version update, encoding fixes |
 | 2.0.0 | 2026 | AES-GCM, PBKDF2, streaming, compression, OutputManager, file logging |
@@ -297,5 +298,5 @@ crypt_tools/
 
 ---
 
-**Document Version:** 1.2
+**Document Version:** 1.3
 **Last Updated:** March 26, 2026

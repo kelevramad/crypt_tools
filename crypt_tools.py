@@ -55,7 +55,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.2.0'
+	VERSION = '2.3.0'
 
 	# File format
 	MAGIC = b'CT02'
