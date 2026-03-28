@@ -49,6 +49,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **Password Strength Indicator** | Live strength and character-class feedback during input |
 | **Visual Feedback** | Progress bars, color-coded logs with emojis, ASCII banners |
 | **File Logging** | Optional timestamped log file for audit trail |
+| **Key File Support** | Generate and use key files for two-factor encryption |
 
 ### 3.2 Security Features
 
@@ -61,6 +62,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **PBKDF2 Iterations** | 100,000 |
 | **Password Verification** | Required for encryption (double-entry) |
 | **Integrity Verification** | Automatic GCM tag verification on decryption |
+| **Key File Support** | 32-byte random key files for two-factor encryption |
 
 ---
 
@@ -121,15 +123,18 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--encrypt` | `-e` | Encrypt mode | Yes (default) |
 | `--decrypt` | `-d` | Decrypt mode | No |
 | `--inspect` | — | Inspect encrypted file metadata | No |
+| `--generate-keyfile` | — | Generate a random key file | None |
 | `--text` | `-t` | Text to process | None |
 | `--file` | `-f` | Input file/directory path or wildcard pattern (e.g., `*.md`, `tests\\*.pyc`) | Required |
 | `--output` | `-o` | Output file path | Auto-generated |
 | `--password` | `-p` | Password | Interactive prompt |
+| `--keyfile` | — | Key file path for encryption/decryption | None |
 | `--compress` | `-c` | Enable zlib compression | Disabled |
 | `--recursive` | `-r` | Process directories or wildcard patterns recursively | Disabled |
 | `--log` | — | Enable file logging to `crypt_tools.log` | Disabled |
 | `--debug` | — | Enable debug logging | Disabled |
-| `--version` | `-v` | Show version | — |
+| `--version` | `-V` | Show version | — |
+| `--help` | `-h` | Show help | — |
 
 ### 5.2 Example Commands
 
@@ -163,6 +168,18 @@ uv run crypt_tools.py --encrypt -f "*.md" -p "password"
 
 # Recursive wildcard inside a directory
 uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "password"
+
+# Generate a key file
+uv run crypt_tools.py --generate-keyfile mykey.bin
+
+# Encrypt with key file only (no password)
+uv run crypt_tools.py --encrypt -f document.txt --keyfile mykey.bin -p ""
+
+# Encrypt with password AND key file (two-factor)
+uv run crypt_tools.py --encrypt -f document.txt -p "password" --keyfile mykey.bin
+
+# Decrypt with key file
+uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.bin -p "password"
 ```
 
 ---
@@ -230,7 +247,6 @@ uv run pytest --cov=crypt_tools --cov-report=html
 | Feature | Priority | Description |
 |---------|----------|-------------|
 | GUI Interface | Low | Desktop application wrapper |
-| Key File Support | Medium | Alternative to password-based encryption |
 | Multi-threading | Low | Parallel file processing |
 | Cloud Integration | Low | Direct S3/Drive encryption |
 | Argon2 Support | Medium | Modern key derivation alternative |
@@ -241,7 +257,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.2.0 | 2026-03-26 | Added `CT02` format header, inspect mode, and automatic compression detection for new files |
+| 2.2.0 | 2026-03-27 | Added key file support (`--generate-keyfile`, `--keyfile`), `CT02` format header, inspect mode, and automatic compression detection for new files |
 | 2.1.0 | 2026-03-16 | Minor version update, encoding fixes |
 | 2.0.0 | 2026 | AES-GCM, PBKDF2, streaming, compression, OutputManager, file logging |
 | 1.x | — | Legacy MD5-based (deprecated) |
