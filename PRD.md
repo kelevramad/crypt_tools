@@ -37,6 +37,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 |---------|-------------|
 | **AES-256-GCM Encryption** | Authenticated encryption ensuring confidentiality and integrity |
 | **PBKDF2 Key Derivation** | 100,000 iterations with HMAC-SHA256 and random 16-byte salt |
+| **Argon2id Support** | Modern KDF alternative (3 iterations, 64MB memory, 4 parallelism) |
 | **Streamed File Processing** | 64KB chunk-based processing for minimal memory footprint |
 | **Optional Compression** | Zlib compression (level 9) before encryption |
 | **Versioned File Format** | `CT02` header with embedded flags and KDF parameters |
@@ -60,6 +61,9 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **Nonce** | 12 bytes (96 bits), random per encryption |
 | **Authentication Tag** | 16 bytes (128 bits) GCM tag |
 | **PBKDF2 Iterations** | 100,000 |
+| **Argon2id Iterations** | 3 (time cost) |
+| **Argon2id Memory** | 64 MB |
+| **Argon2id Parallelism** | 4 |
 | **Password Verification** | Required for encryption (double-entry) |
 | **Integrity Verification** | Automatic GCM tag verification on decryption |
 | **Key File Support** | 32-byte random key files for two-factor encryption |
@@ -131,6 +135,8 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--keyfile` | — | Key file path for encryption/decryption | None |
 | `--compress` | `-c` | Enable zlib compression | Disabled |
 | `--recursive` | `-r` | Process directories or wildcard patterns recursively | Disabled |
+| `--kdf` | — | Key derivation function: `pbkdf2` (default) or `argon2` | `pbkdf2` |
+| `--iterations` | — | Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2) | varies |
 | `--log` | — | Enable file logging to `crypt_tools.log` | Disabled |
 | `--debug` | — | Enable debug logging | Disabled |
 | `--version` | `-V` | Show version | — |
@@ -180,6 +186,15 @@ uv run crypt_tools.py --encrypt -f document.txt -p "password" --keyfile mykey.bi
 
 # Decrypt with key file
 uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.bin -p "password"
+
+# Encrypt with Argon2 (more secure, recommended)
+uv run crypt_tools.py --encrypt -f document.txt -p "password" --kdf argon2
+
+# Encrypt with Argon2 and custom iterations
+uv run crypt_tools.py --encrypt -f document.txt -p "password" --kdf argon2 --iterations 5
+
+# Decrypt file encrypted with Argon2 (auto-detected from file header)
+uv run crypt_tools.py --decrypt -f document.enc -p "password"
 ```
 
 ---
@@ -249,7 +264,6 @@ uv run pytest --cov=crypt_tools --cov-report=html
 | GUI Interface | Low | Desktop application wrapper |
 | Multi-threading | Low | Parallel file processing |
 | Cloud Integration | Low | Direct S3/Drive encryption |
-| Argon2 Support | Medium | Modern key derivation alternative |
 
 ---
 
@@ -257,7 +271,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
-| 2.2.0 | 2026-03-27 | Added key file support (`--generate-keyfile`, `--keyfile`), `CT02` format header, inspect mode, and automatic compression detection for new files |
+| 2.2.0 | 2026-03-27 | Added Argon2id key derivation (`--kdf argon2`, `--iterations`), key file support (`--generate-keyfile`, `--keyfile`), `CT02` format header, inspect mode, and automatic compression detection for new files |
 | 2.1.0 | 2026-03-16 | Minor version update, encoding fixes |
 | 2.0.0 | 2026 | AES-GCM, PBKDF2, streaming, compression, OutputManager, file logging |
 | 1.x | — | Legacy MD5-based (deprecated) |
