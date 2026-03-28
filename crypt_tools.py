@@ -27,6 +27,13 @@ except ImportError:
 	print("Error: Missing dependencies. Please install 'pycryptodome' and 'tqdm'.")
 	sys.exit(1)
 
+try:
+	import argon2.low_level as argon2_low
+
+	ARGON2_AVAILABLE = True
+except ImportError:
+	ARGON2_AVAILABLE = False
+
 
 # Reconfigure stdout/stderr to use UTF-8 encoding (supports emojis)
 def ensure_utf8(stream):
@@ -57,7 +64,13 @@ class Config:
 	FLAG_TEXT = 0x02
 	FLAG_KEYFILE = 0x04
 	KDF_PBKDF2 = 0x01
+	KDF_ARGON2 = 0x02
 	FIXED_HEADER_SIZE = 16
+
+	# Argon2id defaults (recommended for password hashing)
+	ARGON2_MEMORY_COST = 65536  # 64 MB
+	ARGON2_TIME_COST = 3  # iterations
+	ARGON2_PARALLELISM = 4
 
 	# AES-GCM Constants
 	KEY_SIZE = 32  # 256 bits
@@ -105,6 +118,7 @@ class ConsoleLogger:
 		'error': {'icon': '❌', 'color': TerminalColors.Foreground.RED},
 		'warning': {'icon': '⚠️', 'color': TerminalColors.Foreground.YELLOW},
 		'debug': {'icon': '🐞', 'color': TerminalColors.Foreground.MAGENTA},
+		'important': {'icon': '📌', 'color': TerminalColors.Foreground.MAGENTA},
 	}
 
 	@staticmethod
@@ -388,12 +402,41 @@ class CryptoEngine:
 	"""
 
 	def _derive_key(
-		self, password: str, salt: bytes, keyfile_data: Optional[bytes] = None
+		self,
+		password: str,
+		salt: bytes,
+		keyfile_data: Optional[bytes] = None,
+		kdf_type: int = Config.KDF_PBKDF2,
+		iterations: int = Config.PBKDF2_ITERATIONS,
 	) -> bytes:
-		"""Derive a 256-bit key from password (and optional keyfile) and salt using PBKDF2."""
-		ConsoleLogger.show(
-			'debug', f'Deriving key with PBKDF2 ({Config.PBKDF2_ITERATIONS} iterations)'
-		)
+		"""Derive a 256-bit key from password (and optional keyfile) and salt using PBKDF2 or Argon2."""
+		if kdf_type == Config.KDF_ARGON2:
+			if not ARGON2_AVAILABLE:
+				ConsoleLogger.show(
+					'error',
+					'Argon2 is not available. Please install argon2-cffi: pip install argon2-cffi',
+				)
+				raise RuntimeError('Argon2 support not installed')
+			ConsoleLogger.show('debug', f'Deriving key with Argon2id ({iterations} iterations)')
+
+			if keyfile_data:
+				ConsoleLogger.show('debug', 'Using key file for key derivation')
+				derived_from = combine_password_and_keyfile(password, keyfile_data)
+			else:
+				derived_from = password
+
+			key = argon2_low.hash_secret_raw(
+				derived_from.encode('utf-8'),
+				salt,
+				time_cost=iterations,
+				memory_cost=Config.ARGON2_MEMORY_COST,
+				parallelism=Config.ARGON2_PARALLELISM,
+				hash_len=Config.KEY_SIZE,
+				type=argon2_low.Type.ID,
+			)
+			return key
+
+		ConsoleLogger.show('debug', f'Deriving key with PBKDF2 ({iterations} iterations)')
 
 		if keyfile_data:
 			ConsoleLogger.show('debug', 'Using key file for key derivation')
@@ -405,7 +448,7 @@ class CryptoEngine:
 			'sha256',
 			derived_from.encode('utf-8'),
 			salt,
-			Config.PBKDF2_ITERATIONS,
+			iterations,
 			dklen=Config.KEY_SIZE,
 		)
 
@@ -418,7 +461,12 @@ class CryptoEngine:
 		return f'{size:.2f}PB'
 
 	def encrypt_data(
-		self, data: bytes, password: str, keyfile_data: Optional[bytes] = None
+		self,
+		data: bytes,
+		password: str,
+		keyfile_data: Optional[bytes] = None,
+		kdf_type: int = Config.KDF_PBKDF2,
+		iterations: int = Config.PBKDF2_ITERATIONS,
 	) -> bytes:
 		"""
 		Encrypt bytes in memory.
@@ -428,12 +476,14 @@ class CryptoEngine:
 		salt = os.urandom(Config.SALT_SIZE)
 		nonce = os.urandom(Config.NONCE_SIZE)
 		use_keyfile = keyfile_data is not None
-		header = _build_header(is_text=True, use_keyfile=use_keyfile)
+		header = _build_header(
+			is_text=True, use_keyfile=use_keyfile, kdf_id=kdf_type, iterations=iterations
+		)
 		ConsoleLogger.show(
 			'debug',
 			f'Generated salt ({Config.SALT_SIZE} bytes) and nonce ({Config.NONCE_SIZE} bytes)',
 		)
-		key = self._derive_key(password, salt, keyfile_data)
+		key = self._derive_key(password, salt, keyfile_data, kdf_type, iterations)
 
 		ConsoleLogger.show('debug', 'Initializing AES-GCM cipher')
 		cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
@@ -492,13 +542,18 @@ class CryptoEngine:
 			)
 
 			use_keyfile = metadata.get('use_keyfile', False)
+			kdf_type = metadata.get('kdf_id', Config.KDF_PBKDF2)
+			iterations = metadata.get('iterations', Config.PBKDF2_ITERATIONS)
+
 			if use_keyfile and not keyfile_data:
 				ConsoleLogger.show(
 					'warning',
 					'Encrypted with key file but none provided. Attempting password-only decryption.',
 				)
 
-			key = self._derive_key(password, salt, keyfile_data if use_keyfile else None)
+			key = self._derive_key(
+				password, salt, keyfile_data if use_keyfile else None, kdf_type, iterations
+			)
 			ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption')
 			cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
 
@@ -520,6 +575,8 @@ class CryptoEngine:
 		password: str,
 		compress: bool = False,
 		keyfile_data: Optional[bytes] = None,
+		kdf_type: int = Config.KDF_PBKDF2,
+		iterations: int = Config.PBKDF2_ITERATIONS,
 	) -> bool:
 		"""
 		Encrypts a file using streaming (low memory usage).
@@ -536,10 +593,16 @@ class CryptoEngine:
 			salt = os.urandom(Config.SALT_SIZE)
 			nonce = os.urandom(Config.NONCE_SIZE)
 			use_keyfile = keyfile_data is not None
-			key = self._derive_key(password, salt, keyfile_data)
+			key = self._derive_key(password, salt, keyfile_data, kdf_type, iterations)
 			ConsoleLogger.show('debug', 'Initializing AES-GCM cipher')
 			cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-			header = _build_header(compress=compress, is_text=False, use_keyfile=use_keyfile)
+			header = _build_header(
+				compress=compress,
+				is_text=False,
+				use_keyfile=use_keyfile,
+				kdf_id=kdf_type,
+				iterations=iterations,
+			)
 
 			with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
 				# Write Header: CT02 + metadata + SALT + NONCE
@@ -632,6 +695,8 @@ class CryptoEngine:
 					effective_compress = metadata['compress']
 
 				use_keyfile = metadata.get('use_keyfile', False)
+				kdf_type = metadata.get('kdf_id', Config.KDF_PBKDF2)
+				iterations = metadata.get('iterations', Config.PBKDF2_ITERATIONS)
 
 				salt = fin.read(metadata['salt_len'])
 				nonce = fin.read(metadata['nonce_len'])
@@ -646,7 +711,9 @@ class CryptoEngine:
 						'Encrypted with key file but none provided. Attempting password-only decryption.',
 					)
 
-				key = self._derive_key(password, salt, keyfile_data if use_keyfile else None)
+				key = self._derive_key(
+					password, salt, keyfile_data if use_keyfile else None, kdf_type, iterations
+				)
 				ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption')
 				cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
 
@@ -767,7 +834,11 @@ class CryptoEngine:
 			'keyfile': 'enabled' if metadata.get('use_keyfile', False) else 'disabled',
 			'kdf': 'PBKDF2-SHA256'
 			if metadata['kdf_id'] == Config.KDF_PBKDF2
-			else f'unknown({metadata["kdf_id"]})',
+			else (
+				'Argon2id'
+				if metadata['kdf_id'] == Config.KDF_ARGON2
+				else f'unknown({metadata["kdf_id"]})'
+			),
 			'iterations': metadata['iterations'],
 			'saltLength': salt_len,
 			'nonceLength': nonce_len,
@@ -1234,6 +1305,17 @@ def parse_args(argv=None):
 		action='store_true',
 		help='Recursively process directories or wildcard patterns (uses ** for subfolders)',
 	)
+	parser.add_argument(
+		'--kdf',
+		choices=['pbkdf2', 'argon2'],
+		default='pbkdf2',
+		help='Key derivation function: pbkdf2 (default) or argon2 (more secure)',
+	)
+	parser.add_argument(
+		'--iterations',
+		type=int,
+		help='Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)',
+	)
 	parser.add_argument('--debug', action='store_true', help='Enable debug mode')
 	parser.add_argument('--log', action='store_true', help='Enable logging to file')
 	parser.add_argument('-v', '--version', action='version', version=Config.VERSION)
@@ -1361,7 +1443,7 @@ def main(argv=None):
 			ConsoleLogger.show('info', f'Format: {details["format"]}', icon='📋')
 			ConsoleLogger.show('info', f'Version: {details["version"]}', icon='📋')
 			ConsoleLogger.show('info', f'Compression: {details["compression"]}', icon='📋')
-			ConsoleLogger.show('info', f'KDF: {details["kdf"]}', icon='📋')
+			ConsoleLogger.show('info', f'KDF: {details["kdf"]}', icon='🧬')
 			ConsoleLogger.show('info', f'Iterations: {details["iterations"]}', icon='📋')
 			ConsoleLogger.show('info', f'Header Length: {details["headerLength"]} bytes', icon='📋')
 			ConsoleLogger.show(
@@ -1390,7 +1472,7 @@ def main(argv=None):
 			ConsoleLogger.show('info', f'Format: {details["format"]}', icon='📋')
 			ConsoleLogger.show('info', f'Version: {details["version"]}', icon='📋')
 			ConsoleLogger.show('info', f'Compression: {details["compression"]}', icon='📋')
-			ConsoleLogger.show('info', f'KDF: {details["kdf"]}', icon='📋')
+			ConsoleLogger.show('info', f'KDF: {details["kdf"]}', icon='🧬')
 			ConsoleLogger.show('info', f'Iterations: {details["iterations"]}', icon='📋')
 			ConsoleLogger.show('info', f'Header Length: {details["headerLength"]} bytes', icon='📋')
 			ConsoleLogger.show(
@@ -1440,6 +1522,7 @@ def main(argv=None):
 		compression_str = 'enabled' if args.compress else 'disabled'
 		ConsoleLogger.show('info', f'Mode: {mode_str}', icon='🔐' if not args.decrypt else '🔓')
 		ConsoleLogger.show('info', f'Compression: {compression_str}', icon='📦')
+
 		if is_dir and args.recursive:
 			ConsoleLogger.show('info', f'Processing directory: {args.file}', icon='📁')
 			ConsoleLogger.show(
@@ -1460,19 +1543,6 @@ def main(argv=None):
 					icon='📄',
 				)
 
-	# Secure Password Input with Strength Indicator
-	# Only prompt for password if not provided (None), not if empty string was explicitly passed
-	if args.password is None:
-		# Only verify password when encrypting (not needed for decrypting)
-		if not args.decrypt:
-			args.password = getpass_verify_with_strength()
-			ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
-		else:
-			args.password = getpass_with_strength()
-			ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
-	else:
-		ConsoleLogger.show('debug', 'Password provided via command line')
-
 	# Handle key file
 	keyfile_data = None
 	if args.keyfile:
@@ -1486,13 +1556,41 @@ def main(argv=None):
 	else:
 		ConsoleLogger.show('debug', 'No key file provided')
 
+	kdf_type = Config.KDF_ARGON2 if args.kdf == 'argon2' else Config.KDF_PBKDF2
+	if args.kdf == 'argon2' and not ARGON2_AVAILABLE:
+		ConsoleLogger.show(
+			'error', 'Argon2 is not available. Please install argon2-cffi: pip install argon2-cffi'
+		)
+		sys.exit(1)
+
+	iterations = args.iterations
+	if iterations is None:
+		iterations = Config.ARGON2_TIME_COST if args.kdf == 'argon2' else Config.PBKDF2_ITERATIONS
+
+	ConsoleLogger.show('important', f'KDF: {args.kdf} ({iterations} iterations)', icon='🧬')
+
+	# Secure Password Input with Strength Indicator
+	# Only prompt for password if not provided (None), not if empty string was explicitly passed
+	if args.password is None:
+		# Only verify password when encrypting (not needed for decrypting)
+		if not args.decrypt:
+			args.password = getpass_verify_with_strength()
+			ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
+		else:
+			args.password = getpass_with_strength()
+			ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
+	else:
+		ConsoleLogger.show('debug', 'Password provided via command line')
+
 	if args.text:
 		start_time = time.time()
 
 		# Default to encrypt if decrypt is not explicitly set
 		if not args.decrypt:
 			ConsoleLogger.show('info', 'Encrypting text...')
-			result = engine.encrypt_data(args.text.encode('utf-8'), args.password, keyfile_data)
+			result = engine.encrypt_data(
+				args.text.encode('utf-8'), args.password, keyfile_data, kdf_type, iterations
+			)
 			b64_result = base64.b64encode(result).decode('utf-8')
 			ConsoleLogger.show('success', f'Encrypted (Base64): {b64_result}')
 			elapsed_time = time.time() - start_time
@@ -1550,7 +1648,13 @@ def main(argv=None):
 						out_path = file_path + '.enc'
 						ConsoleLogger.show('info', f'Processing: {file_path}', icon='📄')
 						if engine.encrypt_file(
-							file_path, out_path, args.password, args.compress, keyfile_data
+							file_path,
+							out_path,
+							args.password,
+							args.compress,
+							keyfile_data,
+							kdf_type,
+							iterations,
 						):
 							success_count += 1
 							ConsoleLogger.show(
@@ -1624,7 +1728,13 @@ def main(argv=None):
 						output_file = os.path.splitext(target)[0] + '.dec'
 				ok = (
 					engine.encrypt_file(
-						target, output_file, args.password, args.compress, keyfile_data
+						target,
+						output_file,
+						args.password,
+						args.compress,
+						keyfile_data,
+						kdf_type,
+						iterations,
 					)
 					if not args.decrypt
 					else engine.decrypt_file(

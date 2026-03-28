@@ -936,7 +936,14 @@ def test_recursive_encrypt_fail_count(monkeypatch, tmp_path):
 	monkeypatch.setattr(
 		crypt_tools.CryptoEngine,
 		'encrypt_file',
-		lambda self, i, o, p, compress=False, keyfile_data=None: False,
+		lambda self,
+		i,
+		o,
+		p,
+		compress=False,
+		keyfile_data=None,
+		kdf_type=None,
+		iterations=None: False,
 	)
 	main(['--encrypt', '-r', '-f', str(tmp_path), '-p', password])
 
@@ -968,7 +975,14 @@ def test_non_recursive_fail_exit(monkeypatch, tmp_path):
 	monkeypatch.setattr(
 		crypt_tools.CryptoEngine,
 		'encrypt_file',
-		lambda self, i, o, p, compress=False, keyfile_data=None: False,
+		lambda self,
+		i,
+		o,
+		p,
+		compress=False,
+		keyfile_data=None,
+		kdf_type=None,
+		iterations=None: False,
 	)
 	with pytest.raises(SystemExit):
 		main(['--encrypt', '-f', str(infile), '-p', password])
@@ -1365,3 +1379,132 @@ def test_read_keyfile_missing():
 
 	result = crypt_tools.read_keyfile('nonexistent_file.bin')
 	assert result is None
+
+
+def test_argon2_available():
+	"""Test that argon2 is available (or not) based on installation."""
+	from crypt_tools import ARGON2_AVAILABLE
+
+	assert isinstance(ARGON2_AVAILABLE, bool)
+
+
+def test_derive_key_argon2(engine):
+	"""Test Argon2 key derivation."""
+	if not crypt_tools.ARGON2_AVAILABLE:
+		pytest.skip('argon2-cffi not installed')
+
+	password = 'test_password'
+	salt = os.urandom(16)
+	key = engine._derive_key(password, salt, kdf_type=Config.KDF_ARGON2, iterations=3)
+	assert len(key) == 32
+	assert isinstance(key, bytes)
+
+
+def test_argon2_encrypt_decrypt(engine):
+	"""Test encryption/decryption with Argon2."""
+	if not crypt_tools.ARGON2_AVAILABLE:
+		pytest.skip('argon2-cffi not installed')
+
+	password = 'secure_password'
+	data = b'Hello World AES-GCM Argon2'
+
+	encrypted = engine.encrypt_data(data, password, kdf_type=Config.KDF_ARGON2, iterations=3)
+	assert len(encrypted) > len(data)
+	assert encrypted.startswith(Config.MAGIC)
+
+	decrypted = engine.decrypt_data(encrypted, password)
+	assert decrypted == data
+
+
+def test_argon2_file_encrypt_decrypt(engine):
+	"""Test file encryption/decryption with Argon2."""
+	if not crypt_tools.ARGON2_AVAILABLE:
+		pytest.skip('argon2-cffi not installed')
+
+	password = 'argon2_file_pass'
+	content = b'Streamed file content with Argon2' * 100
+
+	fd, input_path = tempfile.mkstemp()
+	os.close(fd)
+
+	with open(input_path, 'wb') as f:
+		f.write(content)
+
+	enc_path = input_path + '.arg.enc'
+	dec_path = input_path + '.arg.dec'
+
+	try:
+		assert engine.encrypt_file(
+			input_path, enc_path, password, kdf_type=Config.KDF_ARGON2, iterations=3
+		)
+		assert os.path.exists(enc_path)
+
+		assert engine.decrypt_file(enc_path, dec_path, password)
+		assert os.path.exists(dec_path)
+
+		with open(dec_path, 'rb') as f:
+			assert f.read() == content
+
+	finally:
+		for p in [input_path, enc_path, dec_path]:
+			if os.path.exists(p):
+				os.remove(p)
+
+
+def test_inspect_file_argon2_kdf(tmp_path):
+	"""Test that inspect reports Argon2 KDF."""
+	if not crypt_tools.ARGON2_AVAILABLE:
+		pytest.skip('argon2-cffi not installed')
+
+	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
+
+	password = 'testpass'
+	infile = tmp_path / 'argon2_data.txt'
+	infile.write_text('secret argon2 content')
+	encfile = tmp_path / 'argon2_data.txt.enc'
+
+	engine = CryptoEngine()
+	engine.encrypt_file(
+		str(infile), str(encfile), password, kdf_type=Config.KDF_ARGON2, iterations=3
+	)
+
+	details = engine.inspect_file(str(encfile))
+	assert details['kdf'] == 'Argon2id'
+	assert details['iterations'] == 3
+
+
+def test_cli_argon2_kdf_info(capsys, tmp_path):
+	"""Test CLI shows Argon2 KDF info."""
+	if not crypt_tools.ARGON2_AVAILABLE:
+		pytest.skip('argon2-cffi not installed')
+
+	infile = tmp_path / 'test.txt'
+	infile.write_text('test content')
+
+	main(['--encrypt', '-f', str(infile), '-p', 'pw', '--kdf', 'argon2', '--iterations', '3'])
+
+	captured = capsys.readouterr()
+	assert 'KDF: argon2 (3 iterations)' in captured.out
+
+
+def test_cli_argon2_text_mode(capsys):
+	"""Test CLI Argon2 text encryption."""
+	if not crypt_tools.ARGON2_AVAILABLE:
+		pytest.skip('argon2-cffi not installed')
+
+	main(['-t', 'hello', '-p', 'pw', '--kdf', 'argon2', '--iterations', '3'])
+
+	captured = capsys.readouterr()
+	assert 'Encrypted (Base64):' in captured.out
+	assert 'KDF: argon2 (3 iterations)' in captured.out
+
+
+def test_cli_default_kdf_is_pbkdf2(capsys, tmp_path):
+	"""Test CLI default KDF is PBKDF2."""
+	infile = tmp_path / 'test.txt'
+	infile.write_text('test')
+
+	main(['--encrypt', '-f', str(infile), '-p', 'pw'])
+
+	captured = capsys.readouterr()
+	assert 'KDF: pbkdf2 (100000 iterations)' in captured.out
