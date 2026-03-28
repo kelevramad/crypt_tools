@@ -14,6 +14,15 @@ const { finished, pipeline } = require('stream/promises');
 const { program } = require('commander');
 const ProgressBar = require('progress');
 
+let argon2;
+let ARGON2_AVAILABLE = false;
+try {
+    argon2 = require('argon2');
+    ARGON2_AVAILABLE = true;
+} catch (e) {
+    // Argon2 not available
+}
+
 // =========================
 // Configuration
 // =========================
@@ -30,7 +39,13 @@ class Config {
     static FLAG_TEXT = 0x02;
     static FLAG_KEYFILE = 0x04;
     static KDF_PBKDF2 = 0x01;
+    static KDF_ARGON2 = 0x02;
     static FIXED_HEADER_SIZE = 16;
+
+    // Argon2id defaults (recommended for password hashing)
+    static ARGON2_MEMORY_COST = 65536;  // 64 MB
+    static ARGON2_TIME_COST = 3;        // iterations
+    static ARGON2_PARALLELISM = 4;
 
     // AES-GCM Constants
     static KEY_SIZE = 32;           // 256 bits
@@ -70,6 +85,7 @@ class ConsoleLogger {
         'error': { icon: '❌', color: TerminalColors.RED },
         'warning': { icon: '⚠️', color: TerminalColors.YELLOW },
         'debug': { icon: '🐞', color: TerminalColors.MAGENTA },
+        'important': { icon: '📌', color: TerminalColors.MAGENTA },
     };
 
     static show(level, message, icon = null, showConsole = true, logFile = true) {
@@ -410,9 +426,7 @@ function combinePasswordAndKeyfile(password, keyfileData) {
 // =========================
 
 class CryptoEngine {
-    _deriveKey(password, salt, keyfileData = null) {
-        ConsoleLogger.show('debug', `Deriving key with PBKDF2 (${Config.PBKDF2_ITERATIONS} iterations)`);
-
+    async _deriveKey(password, salt, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
         let derivedFrom;
         if (keyfileData) {
             ConsoleLogger.show('debug', 'Using key file for key derivation');
@@ -421,10 +435,31 @@ class CryptoEngine {
             derivedFrom = password;
         }
 
+        if (kdfType === Config.KDF_ARGON2) {
+            if (!ARGON2_AVAILABLE) {
+                ConsoleLogger.show('error', 'Argon2 is not available. Please install argon2: npm install argon2');
+                throw new Error('Argon2 support not installed');
+            }
+            ConsoleLogger.show('debug', `Deriving key with Argon2id (${iterations} iterations)`);
+
+            const hash = await argon2.hash(derivedFrom, {
+                salt: salt,
+                type: argon2.argon2id,
+                timeCost: iterations,
+                memoryCost: Config.ARGON2_MEMORY_COST,
+                parallelism: Config.ARGON2_PARALLELISM,
+                hashLength: Config.KEY_SIZE,
+                raw: true
+            });
+            return hash;
+        }
+
+        ConsoleLogger.show('debug', `Deriving key with PBKDF2 (${iterations} iterations)`);
+
         return crypto.pbkdf2Sync(
             derivedFrom,
             salt,
-            Config.PBKDF2_ITERATIONS,
+            iterations,
             Config.KEY_SIZE,
             'sha256'
         );
@@ -441,14 +476,14 @@ class CryptoEngine {
         return `${sizeNum.toFixed(2)}${units[unitIndex]}`;
     }
 
-    encryptData(data, password, keyfileData = null) {
+    async encryptData(data, password, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
         ConsoleLogger.show('debug', `Starting in-memory data encryption (${data.length} bytes input)`);
         const salt = crypto.randomBytes(Config.SALT_SIZE);
         const nonce = crypto.randomBytes(Config.NONCE_SIZE);
         const useKeyfile = keyfileData !== null;
-        const header = buildHeader({ isText: true, useKeyfile });
+        const header = buildHeader({ isText: true, useKeyfile, kdfId: kdfType, iterations });
         ConsoleLogger.show('debug', `Generated salt (${Config.SALT_SIZE} bytes) and nonce (${Config.NONCE_SIZE} bytes)`);
-        const key = this._deriveKey(password, salt, keyfileData);
+        const key = await this._deriveKey(password, salt, keyfileData, kdfType, iterations);
 
         ConsoleLogger.show('debug', 'Initializing AES-GCM cipher');
         const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
@@ -459,7 +494,7 @@ class CryptoEngine {
         return Buffer.concat([header, salt, nonce, encrypted, tag]);
     }
 
-    decryptData(encData, password, keyfileData = null) {
+    async decryptData(encData, password, keyfileData = null) {
         try {
             ConsoleLogger.show('debug', `Starting in-memory data decryption. Total input size: ${encData.length} bytes`);
             const metadata = parseFormatFromBuffer(encData, { textPayload: true });
@@ -490,11 +525,13 @@ class CryptoEngine {
             ConsoleLogger.show('debug', `Extracted salt, nonce, tag, and ciphertext (${ciphertext.length} bytes)`);
 
             const useKeyfile = metadata.useKeyfile || false;
+            const kdfType = metadata.kdfId || Config.KDF_PBKDF2;
+            const iterations = metadata.iterations || Config.PBKDF2_ITERATIONS;
             if (useKeyfile && !keyfileData) {
                 ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
             }
 
-            const key = this._deriveKey(password, salt, keyfileData || null);
+            const key = await this._deriveKey(password, salt, keyfileData || null, kdfType, iterations);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption');
             const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
             decipher.setAuthTag(tag);
@@ -510,7 +547,7 @@ class CryptoEngine {
         }
     }
 
-    async encryptFile(inputPath, outputPath, password, compress = false, keyfileData = null) {
+    async encryptFile(inputPath, outputPath, password, compress = false, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
         try {
             ConsoleLogger.show('debug', `Starting file encryption: ${inputPath} -> ${outputPath}`);
             const stats = fs.statSync(inputPath);
@@ -520,10 +557,10 @@ class CryptoEngine {
             const salt = crypto.randomBytes(Config.SALT_SIZE);
             const nonce = crypto.randomBytes(Config.NONCE_SIZE);
             const useKeyfile = keyfileData !== null;
-            const key = this._deriveKey(password, salt, keyfileData);
+            const key = await this._deriveKey(password, salt, keyfileData, kdfType, iterations);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher');
             const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
-            const header = buildHeader({ compress, useKeyfile });
+            const header = buildHeader({ compress, useKeyfile, kdfId: kdfType, iterations });
 
             const desc = compress ? '[🔒] Compressing & Encrypting' : '[🔒] Encrypting';
             const label = compress ? '[🔒] Compressing & Encrypting:' : '[🔒] Encrypting:';
@@ -590,6 +627,8 @@ class CryptoEngine {
             }
 
             const useKeyfile = metadata.useKeyfile || false;
+            const kdfType = metadata.kdfId || Config.KDF_PBKDF2;
+            const iterations = metadata.iterations || Config.PBKDF2_ITERATIONS;
 
             const salt = Buffer.alloc(metadata.saltLen);
             const nonce = Buffer.alloc(metadata.nonceLen);
@@ -606,7 +645,7 @@ class CryptoEngine {
                 ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
             }
 
-            const key = this._deriveKey(password, salt, keyfileData || null);
+            const key = await this._deriveKey(password, salt, keyfileData || null, kdfType, iterations);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption');
 
             const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
@@ -700,7 +739,7 @@ class CryptoEngine {
             legacy: metadata.isLegacy,
             compression: metadata.compress ? 'enabled' : 'disabled',
             keyfile: metadata.useKeyfile ? 'enabled' : 'disabled',
-            kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : `unknown(${metadata.kdfId})`,
+            kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : (metadata.kdfId === Config.KDF_ARGON2 ? 'Argon2id' : `unknown(${metadata.kdfId})`),
             iterations: metadata.iterations,
             saltLength: metadata.saltLen,
             nonceLength: metadata.nonceLen,
@@ -1020,6 +1059,8 @@ async function main() {
         .option('--keyfile <path>', 'Key file path for encryption/decryption (use with or without password)')
         .option('-c, --compress', 'Enable compression', false)
         .option('-r, --recursive', 'Recursively process directories or wildcard patterns (uses ** for subfolders)', false)
+        .option('--kdf <type>', 'Key derivation function: pbkdf2 (default) or argon2 (more secure)', 'pbkdf2')
+        .option('--iterations <count>', 'Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)', parseInt)
         .option('--debug', 'Enable debug mode', false)
         .option('--log', 'Enable logging to file', false)
         .addHelpText('after',
@@ -1142,8 +1183,6 @@ async function main() {
         const compressionStr = 'disabled';
         ConsoleLogger.show('info', `Mode: ${modeStr}`, options.decrypt ? '🔓' : '🔐');
         ConsoleLogger.show('info', `Compression: ${compressionStr}`, '📦');
-        ConsoleLogger.show('info', 'Processing text...', '💬');
-        ConsoleLogger.show('info', `Input text length: ${options.text.length} characters`);
     } else if (options.file) {
         ConsoleLogger.show('debug', `File specified: ${options.file}`);
         if (!fs.existsSync(options.file) && !hasWildcard(options.file)) {
@@ -1167,6 +1206,7 @@ async function main() {
         const compressionStr = options.compress ? 'enabled' : 'disabled';
         ConsoleLogger.show('info', `Mode: ${modeStr}`, options.decrypt ? '🔓' : '🔐');
         ConsoleLogger.show('info', `Compression: ${compressionStr}`, '📦');
+
         if (isDir && options.recursive) {
             ConsoleLogger.show('info', `Processing directory: ${options.file}`, '📁');
             ConsoleLogger.show('info', `${options.decrypt ? 'Decrypting' : 'Encrypting'} directory: ${options.file}`, options.decrypt ? '🔓' : '🔒');
@@ -1184,19 +1224,10 @@ async function main() {
         }
     }
 
-    // Secure Password Input with Strength Indicator
-    // Only prompt for password if not provided (undefined), not if empty string was explicitly passed
-    if (!options.inspect && options.password === undefined) {
-        // Only verify password when encrypting (not needed for decrypting)
-        if (!options.decrypt) {
-            options.password = await getpassVerifyWithStrength();
-            ConsoleLogger.show('info', 'Password verification entered', '🔄');
-        } else {
-            options.password = await getpassWithStrength();
-            ConsoleLogger.show('info', 'Password entered by user', '🔑');
-        }
-    } else if (!options.inspect) {
-        ConsoleLogger.show('debug', 'Password provided via command line');
+    // Show text info
+    if (options.text) {
+        ConsoleLogger.show('info', 'Processing text...', '💬');
+        ConsoleLogger.show('info', `Input text length: ${options.text.length} characters`);
     }
 
     // Handle key file
@@ -1214,13 +1245,46 @@ async function main() {
         ConsoleLogger.show('debug', 'No key file provided');
     }
 
+    // Handle KDF selection
+    if (options.kdf && !['pbkdf2', 'argon2'].includes(options.kdf)) {
+        ConsoleLogger.show('error', 'Invalid --kdf value. Must be "pbkdf2" or "argon2"');
+        process.exit(1);
+    }
+
+    // Handle KDF selection - show info before password prompt
+    const kdfType = options.kdf === 'argon2' ? Config.KDF_ARGON2 : Config.KDF_PBKDF2;
+    if (options.kdf === 'argon2' && !ARGON2_AVAILABLE) {
+        ConsoleLogger.show('error', 'Argon2 is not available. Please install argon2: npm install argon2');
+        process.exit(1);
+    }
+    let iterations = options.iterations;
+    if (iterations === undefined || isNaN(iterations)) {
+        iterations = options.kdf === 'argon2' ? Config.ARGON2_TIME_COST : Config.PBKDF2_ITERATIONS;
+    }
+    ConsoleLogger.show('important', `KDF: ${options.kdf} (${iterations} iterations)`, '🧬');
+
+    // Secure Password Input with Strength Indicator
+    // Only prompt for password if not provided (undefined), not if empty string was explicitly passed
+    if (!options.inspect && options.password === undefined) {
+        // Only verify password when encrypting (not needed for decrypting)
+        if (!options.decrypt) {
+            options.password = await getpassVerifyWithStrength();
+            ConsoleLogger.show('info', 'Password verification entered', '🔄');
+        } else {
+            options.password = await getpassWithStrength();
+            ConsoleLogger.show('info', 'Password entered by user', '🔑');
+        }
+    } else if (!options.inspect) {
+        ConsoleLogger.show('debug', 'Password provided via command line');
+    }
+
     if (options.text) {
         const startTime = Date.now();
 
         // Default to encrypt if decrypt is not explicitly set
         if (!options.decrypt) {
             ConsoleLogger.show('info', 'Encrypting text...');
-            const result = engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData);
+            const result = await engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData, kdfType, iterations);
             const b64Result = result.toString('base64');
             ConsoleLogger.show('success', `Encrypted (Base64): ${b64Result}`);
             const elapsed = (Date.now() - startTime) / 1000;
@@ -1232,7 +1296,7 @@ async function main() {
             ConsoleLogger.show('info', 'Decrypting text...');
             ConsoleLogger.show('debug', 'Decoding Base64 text input');
             const rawData = Buffer.from(options.text, 'base64');
-            const result = engine.decryptData(rawData, options.password, keyfileData);
+            const result = await engine.decryptData(rawData, options.password, keyfileData);
             if (result) {
                 ConsoleLogger.show('success', `Decrypted: ${result.toString('utf-8')}`);
                 const elapsed = (Date.now() - startTime) / 1000;
@@ -1268,7 +1332,7 @@ async function main() {
 
                     const outPath = filePath + '.enc';
                     ConsoleLogger.show('info', `Processing: ${filePath}`, '📄');
-                    const result = await engine.encryptFile(filePath, outPath, options.password, options.compress, keyfileData);
+                    const result = await engine.encryptFile(filePath, outPath, options.password, options.compress, keyfileData, kdfType, iterations);
                     if (result) {
                         successCount++;
                         const size = fs.statSync(outPath).size;
@@ -1339,7 +1403,7 @@ async function main() {
                         : target + '.enc');
 
                 const ok = !options.decrypt
-                    ? await engine.encryptFile(target, outputFile, options.password, options.compress, keyfileData)
+                    ? await engine.encryptFile(target, outputFile, options.password, options.compress, keyfileData, kdfType, iterations)
                     : await engine.decryptFile(target, outputFile, options.password, options.compress, keyfileData);
 
                 if (ok) {

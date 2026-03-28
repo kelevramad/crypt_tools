@@ -493,6 +493,64 @@ test('inspect shows keyfile enabled', () => {
   }
 });
 
+test('encrypts text with argon2', () => {
+  const enc = runCLI(['-t', 'hello', '-p', 'pw', '--kdf', 'argon2', '--iterations', '3']);
+  assert.equal(enc.code, 0, 'argon2 encrypt should succeed: ' + enc.stderr);
+  assert.match(enc.stdout, /KDF: argon2 \(3 iterations\)/);
+  const m = enc.stdout.match(/Encrypted \(Base64\):\s*([A-Za-z0-9+/=]+)/);
+  assert.ok(m, 'expected encrypted base64 output');
+  const b64 = m[1];
+
+  const dec = runCLI(['-d', '-t', b64, '-p', 'pw']);
+  assert.equal(dec.code, 0);
+  assert.match(dec.stdout, /Decrypted:\s*hello/);
+});
+
+test('encrypts and decrypts file with argon2', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));
+  const infile = path.join(tmp, 'a.txt');
+  fs.writeFileSync(infile, 'argon2 content', 'utf8');
+
+  const enc = runCLI(['-f', infile, '-p', 'pw', '--kdf', 'argon2', '--iterations', '3']);
+  assert.equal(enc.code, 0, 'argon2 encrypt should succeed: ' + enc.stderr);
+  assert.match(enc.stdout, /KDF: argon2 \(3 iterations\)/);
+  const encFile = path.join(path.dirname(infile), path.basename(infile) + '.enc');
+  assert.ok(fs.existsSync(encFile));
+
+  const dec = runCLI(['-d', '-f', encFile, '-p', 'pw']);
+  assert.equal(dec.code, 0);
+  const decFile = path.join(path.dirname(infile), path.basename(infile) + '.dec');
+  assert.ok(fs.existsSync(decFile));
+  assert.equal(fs.readFileSync(decFile, 'utf8'), 'argon2 content');
+});
+
+test('default kdf is pbkdf2', () => {
+  const enc = runCLI(['-t', 'hello', '-p', 'pw']);
+  assert.equal(enc.code, 0);
+  assert.match(enc.stdout, /KDF: pbkdf2 \(100000 iterations\)/);
+});
+
+test('inspect shows argon2 kdf', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+
+  try {
+    fs.writeFileSync(path.join(tmpDir, 'argon2.txt'), 'test content');
+    runCLI([
+      '--encrypt',
+      '-f', 'argon2.txt',
+      '-p', 'testpass',
+      '--kdf', 'argon2',
+      '--iterations', '3',
+    ], { cwd: tmpDir });
+
+    const inspectResult = runCLI(['--inspect', '-f', 'argon2.txt.enc'], { cwd: tmpDir });
+    assert.strictEqual(inspectResult.code, 0, 'inspect should succeed: ' + inspectResult.stderr);
+    assert.ok(inspectResult.stdout.includes('KDF: Argon2id'), 'should show Argon2id');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 
 
 

@@ -5,7 +5,7 @@
 
 ## Key Features
 - **AES-256 Encryption**: Uses AES in **GCM (Galois/Counter Mode)** for authenticated encryption, ensuring both confidentiality and integrity.
-- **Robust Key Derivation**: Implements **PBKDF2-HMAC-SHA256** with 100,000 iterations and a random salt, ensuring strong key protection.
+- **Dual Key Derivation**: Supports **PBKDF2-HMAC-SHA256** (default, 100k iterations) and **Argon2id** (more secure, 3 iterations, 64MB memory).
 - **Streamed Processing**: Processes files in 64KB chunks, allowing encryption of large files with minimal memory usage.
 - **Data Compression**: Optional Zlib compression to reduce file size before encryption.
 - **CLI Interface**: Easy-to-use command line interface for quick operations.
@@ -18,6 +18,7 @@
 - **Versioned File Format (`CT02`)**: New encrypted files include embedded metadata such as format version, compression flag, and KDF parameters.
 - **Inspect Mode**: View encrypted file metadata without decrypting it.
 - **Key File Support**: Generate and use key files for two-factor encryption (password + key file).
+- **Argon2 Support**: Modern Argon2id key derivation alternative with configurable iterations via `--kdf` and `--iterations` flags.
 
 ## Installation
 
@@ -122,6 +123,15 @@ node crypt_tools.js --decrypt -f document.enc --keyfile mykey.bin -p "your_passw
 
 # Encrypt text with key file
 node crypt_tools.js --encrypt -t "Secret message" -p "password" --keyfile mykey.bin
+
+# Encrypt with Argon2 (more secure, recommended)
+node crypt_tools.js --encrypt -f document.txt -p "your_password" --kdf argon2
+
+# Encrypt with Argon2 and custom iterations
+node crypt_tools.js --encrypt -f document.txt -p "your_password" --kdf argon2 --iterations 5
+
+# Decrypt file encrypted with Argon2 (auto-detected from file header)
+node crypt_tools.js --decrypt -f document.enc -p "your_password"
 ```
 
 ### CLI Arguments
@@ -139,6 +149,8 @@ node crypt_tools.js --encrypt -t "Secret message" -p "password" --keyfile mykey.
 | `--keyfile` | — | Key file path for encryption/decryption |
 | `--compress` | `-c` | Enable compression |
 | `--recursive` | `-r` | Recursively process directories |
+| `--kdf` | — | Key derivation function: `pbkdf2` (default) or `argon2` |
+| `--iterations` | — | Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2) |
 | `--log` | — | Enable logging to file (`crypt_tools.log`) |
 | `--debug` | — | Enable debug mode |
 | `--version` | `-V` | Show version |
@@ -174,8 +186,9 @@ This tool improves upon older implementations by:
 3.  **Nonce**: Using a **12-byte random nonce** (GCM standard).
 4.  **Authentication**: Using AES-GCM provides a **16-byte Tag** to verify data integrity.
 5.  **Chunk Size**: **64 KB** for streaming large files efficiently.
-6.  **PBKDF2 Iterations**: **100,000** iterations for key derivation.
-7.  **Header Format**: New encrypted files include a fixed `CT02` header with flags and KDF parameters.
+6.  **PBKDF2 Iterations**: **100,000** iterations for key derivation (default).
+7.  **Argon2id Support**: Modern KDF with **3** iterations, **64 MB** memory, and **4** parallelism (configurable via `--iterations`).
+8.  **Header Format**: New encrypted files include a fixed `CT02` header with flags, KDF ID, and KDF parameters.
 
 ### File Formats
 
@@ -213,7 +226,7 @@ This tool improves upon older implementations by:
 ### CryptoEngine Methods
 | Method | Description |
 |--------|-------------|
-| `_deriveKey(password, salt)` | Derives 256-bit key using PBKDF2-HMAC-SHA256 |
+| `_deriveKey(password, salt, kdfType, iterations)` | Derives 256-bit key using PBKDF2-HMAC-SHA256 or Argon2id |
 | `_formatSize(size)` | Converts bytes to human-readable format |
 | `encryptData(data, password)` | Encrypts bytes in memory |
 | `decryptData(encData, password)` | Decrypts bytes in memory |
