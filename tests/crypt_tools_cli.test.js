@@ -73,12 +73,12 @@ test('encrypts and decrypts file', () => {
 
   const enc = runCLI(['-f', infile, '-p', 'pw']);
   assert.equal(enc.code, 0);
-  const encFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.enc');
+  const encFile = path.join(path.dirname(infile), path.basename(infile) + '.enc');
   assert.ok(fs.existsSync(encFile));
 
   const dec = runCLI(['-d', '-f', encFile, '-p', 'pw']);
-  assert.equal(dec.code, 0);
-  const decFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.dec');
+  assert.equal(enc.code, 0);
+  const decFile = path.join(path.dirname(infile), path.basename(infile) + '.dec');
   assert.ok(fs.existsSync(decFile));
   assert.equal(fs.readFileSync(decFile, 'utf8'), 'content');
 });
@@ -97,12 +97,12 @@ test('decrypt file with wrong password does not create output', () => {
 
   const enc = runCLI(['-f', infile, '-p', 'pw']);
   assert.equal(enc.code, 0);
-  const encFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.enc');
+  const encFile = path.join(path.dirname(infile), path.basename(infile) + '.enc');
   assert.ok(fs.existsSync(encFile));
 
   const dec = runCLI(['-d', '-f', encFile, '-p', 'wrong']);
   assert.equal(dec.code, 1);
-  const decFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.dec');
+  const decFile = path.join(path.dirname(infile), path.basename(infile) + '.dec');
   assert.ok(!fs.existsSync(decFile));
 });
 test('decrypt file too small fails', () => {
@@ -112,7 +112,7 @@ test('decrypt file too small fails', () => {
 
   const dec = runCLI(['-d', '-f', infile, '-p', 'pw']);
   assert.match(dec.stdout + dec.stderr, /File too small/);
-  const decFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.dec');
+  const decFile = path.join(path.dirname(infile), path.basename(infile) + '.dec');
   assert.ok(!fs.existsSync(decFile));
 });
 
@@ -154,9 +154,9 @@ test('wildcard supports character class and question mark', () => {
   const pattern = path.join(tmp, 'a?.t[xt]');
   const res = runCLI(['-f', pattern, '-p', 'pw']);
   assert.equal(res.code, 0);
-  assert.ok(fs.existsSync(path.join(tmp, 'a1.enc')));
-  assert.ok(fs.existsSync(path.join(tmp, 'a2.enc')));
-  assert.ok(!fs.existsSync(path.join(tmp, 'b1.enc')));
+  assert.ok(fs.existsSync(path.join(tmp, 'a1.tx.enc')));
+  assert.ok(fs.existsSync(path.join(tmp, 'a2.tt.enc')));
+  assert.ok(!fs.existsSync(path.join(tmp, 'b1.tx.enc')));
 });
 
 test('wildcard skips file paths with brackets', () => {
@@ -167,8 +167,8 @@ test('wildcard skips file paths with brackets', () => {
   const pattern = path.join(tmp, '*.txt');
   const res = runCLI(['-f', pattern, '-p', 'pw']);
   assert.equal(res.code, 0);
-  assert.ok(!fs.existsSync(path.join(tmp, 'a[1].enc')));
-  assert.ok(fs.existsSync(path.join(tmp, 'b.enc')));
+  assert.ok(!fs.existsSync(path.join(tmp, 'a[1].txt.enc')));
+  assert.ok(fs.existsSync(path.join(tmp, 'b.txt.enc')));
 });
 
 test('wildcard on missing directory reports unexpected error', () => {
@@ -191,8 +191,8 @@ test('non-recursive wildcard processes multiple files', () => {
   const pattern = path.join(tmp, '*.txt');
   const res = runCLI(['-f', pattern, '-p', 'pw']);
   assert.equal(res.code, 0);
-  assert.ok(fs.existsSync(path.join(tmp, 'a.enc')));
-  assert.ok(fs.existsSync(path.join(tmp, 'b.enc')));
+  assert.ok(fs.existsSync(path.join(tmp, 'a.txt.enc')));
+  assert.ok(fs.existsSync(path.join(tmp, 'b.txt.enc')));
 });
 test('compress flag produces smaller encrypted file', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));
@@ -201,12 +201,12 @@ test('compress flag produces smaller encrypted file', () => {
 
   const encNoComp = runCLI(['-f', infile, '-p', 'pw']);
   assert.equal(encNoComp.code, 0);
-  const encNoCompFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.enc');
+  const encNoCompFile = path.join(path.dirname(infile), path.basename(infile) + '.enc');
   const sizeNoComp = fs.statSync(encNoCompFile).size;
 
   const encComp = runCLI(['-f', infile, '-p', 'pw', '-c']);
   assert.equal(encComp.code, 0);
-  const encCompFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.enc');
+  const encCompFile = path.join(path.dirname(infile), path.basename(infile) + '.enc');
   const sizeComp = fs.statSync(encCompFile).size;
 
   assert.ok(sizeComp < sizeNoComp);
@@ -218,12 +218,12 @@ test('compress flag decrypts back original file', () => {
 
   const enc = runCLI(['-f', infile, '-p', 'pw', '-c']);
   assert.equal(enc.code, 0);
-  const encFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.enc');
+  const encFile = path.join(path.dirname(infile), path.basename(infile) + '.enc');
   assert.ok(fs.existsSync(encFile));
 
   const dec = runCLI(['-d', '-f', encFile, '-p', 'pw', '-c']);
   assert.equal(dec.code, 0);
-  const decFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.dec');
+  const decFile = path.join(path.dirname(infile), path.basename(infile) + '.dec');
   assert.ok(fs.existsSync(decFile));
   assert.equal(fs.readFileSync(decFile, 'utf8'), 'A'.repeat(5000));
 });
@@ -336,8 +336,8 @@ test('recursive wildcard expands and encrypts', () => {
   if (res.code !== 0) {
     throw new Error(`exit ${res.code}: ${res.stdout} ${res.stderr}`);
   }
-  assert.ok(fs.existsSync(path.join(tmp, 'a.enc')));
-  assert.ok(fs.existsSync(path.join(sub, 'b.enc')));
+  assert.ok(fs.existsSync(path.join(tmp, 'a.txt.enc')));
+  assert.ok(fs.existsSync(path.join(sub, 'b.txt.enc')));
 });
 
 test('output flag writes to custom path', () => {
@@ -357,7 +357,7 @@ test('output flag works for decrypt', () => {
 
   const enc = runCLI(['-f', infile, '-p', 'pw']);
   assert.equal(enc.code, 0);
-  const encFile = path.join(path.dirname(infile), path.basename(infile, path.extname(infile)) + '.enc');
+  const encFile = path.join(path.dirname(infile), path.basename(infile) + '.enc');
 
   const decOut = path.join(tmp, 'out.txt');
   const dec = runCLI(['-d', '-f', encFile, '-o', decOut, '-p', 'pw']);
@@ -371,6 +371,126 @@ test('directory without -r exits with error', () => {
   const res = runCLI(['-f', tmp, '-p', 'pw']);
   assert.equal(res.code, 1);
   assert.match(res.stdout + res.stderr, /Use -r\/--recursive/);
+});
+
+test('generate-keyfile creates key file', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+  const keyfilePath = path.join(tmpDir, 'test_key.bin');
+
+  const result = runCLI(['--generate-keyfile', keyfilePath], { cwd: tmpDir });
+
+  try {
+    assert.strictEqual(result.code, 0, 'should exit with code 0');
+    assert.ok(fs.existsSync(keyfilePath), 'key file should exist');
+    assert.strictEqual(fs.statSync(keyfilePath).size, 32, 'key file should be 32 bytes');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('encrypts and decrypts file with keyfile', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+
+  try {
+    // Generate keyfile (relative path)
+    let res = runCLI(['--generate-keyfile', 'key.bin'], { cwd: tmpDir });
+    assert.strictEqual(res.code, 0);
+
+    // Create input file
+    fs.writeFileSync(path.join(tmpDir, 'plain.txt'), 'Secret message for keyfile test');
+
+    // Encrypt with keyfile (relative paths)
+    res = runCLI([
+      '--encrypt',
+      '-f', 'plain.txt',
+      '--keyfile', 'key.bin',
+      '-p', 'testpassword',
+    ], { cwd: tmpDir });
+
+    assert.strictEqual(res.code, 0, 'encryption should succeed: ' + res.stderr);
+    assert.ok(fs.existsSync(path.join(tmpDir, 'plain.txt.enc')), 'encrypted file should exist');
+
+    // Decrypt with keyfile
+    res = runCLI([
+      '--decrypt',
+      '-f', 'plain.txt.enc',
+      '--keyfile', 'key.bin',
+      '-p', 'testpassword',
+    ], { cwd: tmpDir });
+
+    assert.strictEqual(res.code, 0, 'decryption should succeed: ' + res.stderr);
+    assert.ok(fs.existsSync(path.join(tmpDir, 'plain.txt.dec')), 'decrypted file should exist');
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, 'plain.txt.dec'), 'utf8'),
+      'Secret message for keyfile test'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('encrypts file with keyfile only (no password)', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+
+  try {
+    // Generate keyfile
+    runCLI(['--generate-keyfile', 'key.bin'], { cwd: tmpDir });
+
+    // Create input file
+    fs.writeFileSync(path.join(tmpDir, 'plain.txt'), 'Message with keyfile only');
+
+    // Encrypt with keyfile only (empty password)
+    let res = runCLI([
+      '--encrypt',
+      '-f', 'plain.txt',
+      '--keyfile', 'key.bin',
+      '-p', '',
+    ], { cwd: tmpDir });
+
+    assert.strictEqual(res.code, 0, 'encryption should succeed: ' + res.stderr);
+
+    // Decrypt with keyfile only
+    res = runCLI([
+      '--decrypt',
+      '-f', 'plain.txt.enc',
+      '--keyfile', 'key.bin',
+      '-p', '',
+    ], { cwd: tmpDir });
+
+    assert.strictEqual(res.code, 0, 'decryption should succeed: ' + res.stderr);
+    assert.strictEqual(
+      fs.readFileSync(path.join(tmpDir, 'plain.txt.dec'), 'utf8'),
+      'Message with keyfile only'
+    );
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('inspect shows keyfile enabled', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+
+  try {
+    // Generate keyfile
+    runCLI(['--generate-keyfile', 'key.bin'], { cwd: tmpDir });
+
+    // Create and encrypt file
+    fs.writeFileSync(path.join(tmpDir, 'plain.txt'), 'Test content');
+    runCLI([
+      '--encrypt',
+      '-f', 'plain.txt',
+      '--keyfile', 'key.bin',
+      '-p', 'testpass',
+    ], { cwd: tmpDir });
+
+    // Inspect the file
+    const inspectResult = runCLI(['--inspect', '-f', 'plain.txt.enc'], { cwd: tmpDir });
+
+    assert.strictEqual(inspectResult.code, 0, 'inspect should succeed: ' + inspectResult.stderr);
+    assert.ok(inspectResult.stdout.includes('Keyfile: enabled'), 'should show keyfile enabled');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
 });
 
 

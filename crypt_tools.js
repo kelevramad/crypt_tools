@@ -21,7 +21,7 @@ const ProgressBar = require('progress');
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.1.0';
+    static VERSION = '2.2.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -221,28 +221,37 @@ class Banner {
                          \______/ |__/
     `,
         String.raw`
-      ██████╗██████╗ ██╗   ██╗██████╗ ████████╗    ████████╗ ██████╗  ██████╗ ██╗     ███████╗
-     ██╔════╝██╔══██╗╚██╗ ██╔╝██╔══██╗╚══██╔══╝    ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝
-     ██║     ██████╔╝ ╚████╔╝ ██████╔╝   ██║          ██║   ██║   ██║██║   ██║██║     ███████╗
-     ██║     ██╔══██╗  ╚██╔╝  ██╔═══╝    ██║          ██║   ██║   ██║██║   ██║██║     ╚════██║
-     ╚██████╗██║  ██║   ██║   ██║        ██║          ██║   ╚██████╔╝╚██████╔╝███████╗███████║
-      ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝        ╚═╝          ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
+      ÛÛÛÛÛÛÛÛÛ                                  ÛÛÛÛÛ       ÛÛÛÛÛÛÛÛÛÛÛ                   ÛÛÛÛ
+      ÛÛÛ°°°°°ÛÛÛ                                °°ÛÛÛ       °Û°°°ÛÛÛ°°°Û                  °°ÛÛÛ
+     ÛÛÛ     °°°  ÛÛÛÛÛÛÛÛ  ÛÛÛÛÛ ÛÛÛÛ ÛÛÛÛÛÛÛÛ  ÛÛÛÛÛÛÛ     °   °ÛÛÛ  °   ÛÛÛÛÛÛ   ÛÛÛÛÛÛ  °ÛÛÛ   ÛÛÛÛÛ
+    °ÛÛÛ         °°ÛÛÛ°°ÛÛÛ°°ÛÛÛ °ÛÛÛ °°ÛÛÛ°°ÛÛÛ°°°ÛÛÛ°          °ÛÛÛ     ÛÛÛ°°ÛÛÛ ÛÛÛ°°ÛÛÛ °ÛÛÛ  ÛÛÛ°°
+    °ÛÛÛ          °ÛÛÛ °°°  °ÛÛÛ °ÛÛÛ  °ÛÛÛ °ÛÛÛ  °ÛÛÛ           °ÛÛÛ    °ÛÛÛ °ÛÛÛ°ÛÛÛ °ÛÛÛ °ÛÛÛ °°ÛÛÛÛÛ
+    °°ÛÛÛ     ÛÛÛ °ÛÛÛ      °ÛÛÛ °ÛÛÛ  °ÛÛÛ °ÛÛÛ  °ÛÛÛ ÛÛÛ       °ÛÛÛ    °ÛÛÛ °ÛÛÛ°ÛÛÛ °ÛÛÛ °ÛÛÛ  °°°°ÛÛÛ
+     °°ÛÛÛÛÛÛÛÛÛ  ÛÛÛÛÛ     °°ÛÛÛÛÛÛÛ  °ÛÛÛÛÛÛÛ   °°ÛÛÛÛÛ        ÛÛÛÛÛ   °°ÛÛÛÛÛÛ °°ÛÛÛÛÛÛ  ÛÛÛÛÛ ÛÛÛÛÛÛ
+      °°°°°°°°°  °°°°°       °°°°°ÛÛÛ  °ÛÛÛ°°°     °°°°°        °°°°°     °°°°°°   °°°°°°  °°°°° °°°°°°
+                             ÛÛÛ °ÛÛÛ  °ÛÛÛ
+                            °°ÛÛÛÛÛÛ   ÛÛÛÛÛ
+                             °°°°°°   °°°°°
     `,
         String.raw`
-     ██████╗ ██████╗ ██╗   ██╗██████╗ ███████╗███████╗███████╗
-    ██╔════╝██╔═══██╗██║   ██║██╔══██╗██╔════╝██╔════╝██╔════╝
-    ██║     ██║   ██║██║   ██║██████╔╝█████╗  █████╗  ███████╗
-    ██║     ██║   ██║██║   ██║██╔══██╗██╔══╝  ██╔══╝  ╚════██║
-    ╚██████╗╚██████╔╝╚██████╔╝██║  ██║███████╗███████╗███████║
-     ╚═════╝ ╚═════╝  ╚═════╝ ╚═╝  ╚═╝╚══════╝╚══════╝╚══════╝
+      ,ad8888ba,                                               888888888888                    88
+     d8"'    '"8b                                     ,d            88                         88
+    d8'                                               88            88                         88
+    88            8b,dPPYba, 8b       d8 8b,dPPYba, MM88MMM         88  ,adPPYba,   ,adPPYba,  88 ,adPPYba,
+    88            88P'   "Y8 '8b     d8' 88P'    "8a  88            88 a8"     "8a a8"     "8a 88 I8[    ""
+    Y8,           88          '8b,  d8'  88       d8  88            88 8b       d8 8b       d8 88  '"Y8ba,
+     Y8a.    .a8P 88           '8b,d8'   88b,   ,a8"  88,           88 "8a,   ,a8" "8a,   ,a8" 88 aa    ]8I
+      '"Y8888Y"'  88             Y88'    88'YbbdP"'   "Y888         88  '"YbbdP"'   '"YbbdP"'  88 '"YbbdP"'
+                                 d8'     88
+                                d8'      88
     `,
         String.raw`
-     ██████╗ ███████╗ █████╗ ██████╗ 
-    ██╔════╝ ██╔════╝██╔══██╗██╔══██╗
-    ██║  ███╗█████╗  ███████║██║  ██║
-    ██║   ██║██╔══╝  ██╔══██║██║  ██║
-    ╚██████╔╝███████╗██║  ██║██████╔╝
-     ╚═════╝ ╚══════╝╚═╝  ╚═╝╚═════╝ 
+     ██████╗██████╗ ██╗   ██╗██████╗ ████████╗    ████████╗ ██████╗  ██████╗ ██╗     ███████╗
+    ██╔════╝██╔══██╗╚██╗ ██╔╝██╔══██╗╚══██╔══╝    ╚══██╔══╝██╔═══██╗██╔═══██╗██║     ██╔════╝
+    ██║     ██████╔╝ ╚████╔╝ ██████╔╝   ██║          ██║   ██║   ██║██║   ██║██║     ███████╗
+    ██║     ██╔══██╗  ╚██╔╝  ██╔═══╝    ██║          ██║   ██║   ██║██║   ██║██║     ╚════██║
+    ╚██████╗██║  ██║   ██║   ██║        ██║          ██║   ╚██████╔╝╚██████╔╝███████╗███████║
+     ╚═════╝╚═╝  ╚═╝   ╚═╝   ╚═╝        ╚═╝          ╚═╝    ╚═════╝  ╚═════╝ ╚══════╝╚══════╝
     `
     ];
 
@@ -266,10 +275,11 @@ function bufferToUint32(buf) {
     return buf.readUInt32BE(0);
 }
 
-function buildHeader({ compress = false, isText = false, kdfId = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS } = {}) {
+function buildHeader({ compress = false, isText = false, useKeyfile = false, kdfId = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS } = {}) {
     let flags = 0;
     if (compress) flags |= Config.FLAG_COMPRESS;
     if (isText) flags |= Config.FLAG_TEXT;
+    if (useKeyfile) flags |= Config.FLAG_KEYFILE;
 
     const kdfParams = uint32ToBuffer(iterations);
     return Buffer.concat([
@@ -309,6 +319,7 @@ function parseCT02HeaderFromBuffer(buffer) {
         flags,
         compress: Boolean(flags & Config.FLAG_COMPRESS),
         isText: Boolean(flags & Config.FLAG_TEXT),
+        useKeyfile: Boolean(flags & Config.FLAG_KEYFILE),
         kdfId,
         iterations,
         saltLen,
@@ -327,6 +338,7 @@ function parseLegacyHeader({ textPayload = false } = {}) {
         flags: 0,
         compress: null,
         isText: textPayload,
+        useKeyfile: false,
         kdfId: Config.KDF_PBKDF2,
         iterations: Config.PBKDF2_ITERATIONS,
         saltLen: Config.SALT_SIZE,
@@ -346,14 +358,71 @@ function parseFormatFromBuffer(buffer, { textPayload = false } = {}) {
 }
 
 // =========================
+// Key File Functions
+// =========================
+
+function generateKeyfile(outputPath, keySize = Config.KEY_SIZE) {
+    try {
+        const key = crypto.randomBytes(keySize);
+        fs.writeFileSync(outputPath, key);
+        ConsoleLogger.show('success', `Key file generated: ${outputPath}`);
+        ConsoleLogger.show('info', `Key size: ${keySize} bytes (${keySize * 8} bits)`);
+        return true;
+    } catch (err) {
+        ConsoleLogger.show('error', `Failed to generate key file: ${err.message}`);
+        return false;
+    }
+}
+
+function readKeyfile(keyfilePath) {
+    try {
+        if (!fs.existsSync(keyfilePath)) {
+            throw new Error(`Key file not found: ${keyfilePath}`);
+        }
+
+        const fileSize = fs.statSync(keyfilePath).size;
+        if (fileSize < 16) {
+            throw new Error(`Key file too small: ${fileSize} bytes (minimum 16)`);
+        }
+
+        if (fileSize > 1024) {
+            throw new Error(`Key file too large: ${fileSize} bytes (maximum 1024)`);
+        }
+
+        const keyData = fs.readFileSync(keyfilePath);
+        ConsoleLogger.show('debug', `Read key file: ${keyfilePath} (${keyData.length} bytes)`);
+        return keyData;
+    } catch (err) {
+        ConsoleLogger.show('error', `Failed to read key file: ${err.message}`);
+        return null;
+    }
+}
+
+function combinePasswordAndKeyfile(password, keyfileData) {
+    const passwordBuffer = Buffer.from(password, 'utf-8');
+    const combined = Buffer.concat([passwordBuffer, keyfileData]);
+    const hashed = crypto.createHash('sha256').update(combined).digest();
+    return hashed.toString('hex');
+}
+
+// =========================
 // Core Logic (Engine)
 // =========================
 
 class CryptoEngine {
-    _deriveKey(password, salt) {
+    _deriveKey(password, salt, keyfileData = null) {
         ConsoleLogger.show('debug', `Deriving key with PBKDF2 (${Config.PBKDF2_ITERATIONS} iterations)`);
+
+        let derivedFrom;
+        if (keyfileData) {
+            ConsoleLogger.show('debug', 'Using key file for key derivation');
+            derivedFrom = combinePasswordAndKeyfile(password, keyfileData);
+        } else {
+            derivedFrom = password;
+        }
+
         return crypto.pbkdf2Sync(
-            password,
+            derivedFrom,
             salt,
             Config.PBKDF2_ITERATIONS,
             Config.KEY_SIZE,
@@ -372,13 +441,14 @@ class CryptoEngine {
         return `${sizeNum.toFixed(2)}${units[unitIndex]}`;
     }
 
-    encryptData(data, password) {
+    encryptData(data, password, keyfileData = null) {
         ConsoleLogger.show('debug', `Starting in-memory data encryption (${data.length} bytes input)`);
         const salt = crypto.randomBytes(Config.SALT_SIZE);
         const nonce = crypto.randomBytes(Config.NONCE_SIZE);
-        const header = buildHeader({ isText: true });
+        const useKeyfile = keyfileData !== null;
+        const header = buildHeader({ isText: true, useKeyfile });
         ConsoleLogger.show('debug', `Generated salt (${Config.SALT_SIZE} bytes) and nonce (${Config.NONCE_SIZE} bytes)`);
-        const key = this._deriveKey(password, salt);
+        const key = this._deriveKey(password, salt, keyfileData);
 
         ConsoleLogger.show('debug', 'Initializing AES-GCM cipher');
         const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
@@ -389,7 +459,7 @@ class CryptoEngine {
         return Buffer.concat([header, salt, nonce, encrypted, tag]);
     }
 
-    decryptData(encData, password) {
+    decryptData(encData, password, keyfileData = null) {
         try {
             ConsoleLogger.show('debug', `Starting in-memory data decryption. Total input size: ${encData.length} bytes`);
             const metadata = parseFormatFromBuffer(encData, { textPayload: true });
@@ -419,7 +489,12 @@ class CryptoEngine {
             }
             ConsoleLogger.show('debug', `Extracted salt, nonce, tag, and ciphertext (${ciphertext.length} bytes)`);
 
-            const key = this._deriveKey(password, salt);
+            const useKeyfile = metadata.useKeyfile || false;
+            if (useKeyfile && !keyfileData) {
+                ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
+            }
+
+            const key = this._deriveKey(password, salt, keyfileData || null);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption');
             const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
             decipher.setAuthTag(tag);
@@ -435,7 +510,7 @@ class CryptoEngine {
         }
     }
 
-    async encryptFile(inputPath, outputPath, password, compress = false) {
+    async encryptFile(inputPath, outputPath, password, compress = false, keyfileData = null) {
         try {
             ConsoleLogger.show('debug', `Starting file encryption: ${inputPath} -> ${outputPath}`);
             const stats = fs.statSync(inputPath);
@@ -444,10 +519,11 @@ class CryptoEngine {
             ConsoleLogger.show('debug', `Generating ${Config.SALT_SIZE} bytes salt and ${Config.NONCE_SIZE} bytes nonce`);
             const salt = crypto.randomBytes(Config.SALT_SIZE);
             const nonce = crypto.randomBytes(Config.NONCE_SIZE);
-            const key = this._deriveKey(password, salt);
+            const useKeyfile = keyfileData !== null;
+            const key = this._deriveKey(password, salt, keyfileData);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher');
             const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
-            const header = buildHeader({ compress });
+            const header = buildHeader({ compress, useKeyfile });
 
             const desc = compress ? '[🔒] Compressing & Encrypting' : '[🔒] Encrypting';
             const label = compress ? '[🔒] Compressing & Encrypting:' : '[🔒] Encrypting:';
@@ -491,7 +567,7 @@ class CryptoEngine {
         }
     }
 
-    async decryptFile(inputPath, outputPath, password, compress = false) {
+    async decryptFile(inputPath, outputPath, password, compress = false, keyfileData = null) {
         try {
             const stats = fs.statSync(inputPath);
             const fileSize = stats.size;
@@ -513,6 +589,8 @@ class CryptoEngine {
                 metadata = parseCT02HeaderFromBuffer(prefix);
             }
 
+            const useKeyfile = metadata.useKeyfile || false;
+
             const salt = Buffer.alloc(metadata.saltLen);
             const nonce = Buffer.alloc(metadata.nonceLen);
             const tag = Buffer.alloc(metadata.tagLen);
@@ -523,7 +601,12 @@ class CryptoEngine {
 
             const ciphertextLen = fileSize - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen;
             ConsoleLogger.show('debug', `Read salt (${salt.length} bytes), nonce (${nonce.length} bytes), ciphertext (${ciphertextLen} bytes), and tag (${tag.length} bytes)`);
-            const key = this._deriveKey(password, salt);
+
+            if (useKeyfile && !keyfileData) {
+                ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
+            }
+
+            const key = this._deriveKey(password, salt, keyfileData || null);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption');
 
             const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
@@ -616,6 +699,7 @@ class CryptoEngine {
             version: metadata.version,
             legacy: metadata.isLegacy,
             compression: metadata.compress ? 'enabled' : 'disabled',
+            keyfile: metadata.useKeyfile ? 'enabled' : 'disabled',
             kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : `unknown(${metadata.kdfId})`,
             iterations: metadata.iterations,
             saltLength: metadata.saltLen,
@@ -928,10 +1012,12 @@ async function main() {
         .option('-e, --encrypt', 'Encrypt mode (default)', true)
         .option('-d, --decrypt', 'Decrypt mode', false)
         .option('--inspect', 'Inspect encrypted file metadata', false)
+        .option('--generate-keyfile <path>', 'Generate a random key file and exit')
         .option('-t, --text <text>', 'Text to process')
         .option('-f, --file <path>', 'File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
         .option('-o, --output <path>', 'Output file path')
         .option('-p, --password <password>', 'Password (optional; prompt includes strength indicator)')
+        .option('--keyfile <path>', 'Key file path for encryption/decryption (use with or without password)')
         .option('-c, --compress', 'Enable compression', false)
         .option('-r, --recursive', 'Recursively process directories or wildcard patterns (uses ** for subfolders)', false)
         .option('--debug', 'Enable debug mode', false)
@@ -940,23 +1026,43 @@ async function main() {
             '\nNotes:\n' +
             '  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively\n' +
             '    (equivalent to .\\temp\\**\\*.txt).\n' +
-            '  - Password prompts show a live strength indicator.\n'
+            '  - Password prompts show a live strength indicator.\n' +
+            '  - Key file support: Use --keyfile to encrypt/decrypt with a key file.\n' +
+            '    Combining password + keyfile provides two-factor encryption.'
         );
+
+    // Show banner for help/version
+    const helpOrVersion = process.argv.includes('-h') || process.argv.includes('--help') || process.argv.includes('-V') || process.argv.includes('--version');
+    if (helpOrVersion) {
+        Banner.show();
+    }
 
     program.parse(process.argv);
     const options = program.opts();
 
-    // Require either text or file
-    if (!options.text && !options.file) {
-        ConsoleLogger.show('error', 'Either --text or --file is required');
-        process.exit(1);
-    }
-    if (options.inspect && options.text) {
-        ConsoleLogger.show('error', '--inspect only supports --file input');
-        process.exit(1);
+    // Handle key file generation
+    if (options.generateKeyfile) {
+        if (generateKeyfile(options.generateKeyfile)) {
+            process.exit(0);
+        } else {
+            process.exit(1);
+        }
     }
 
+    // Show banner first
     Banner.show();
+
+    // Require either text or file (skip for --generate-keyfile)
+    if (!options.generateKeyfile) {
+        if (!options.text && !options.file) {
+            ConsoleLogger.show('error', 'Either --text or --file is required');
+            process.exit(1);
+        }
+        if (options.inspect && options.text) {
+            ConsoleLogger.show('error', '--inspect only supports --file input');
+            process.exit(1);
+        }
+    }
 
     // Enable logging FIRST if --log flag is set
     if (options.log) {
@@ -1014,6 +1120,7 @@ async function main() {
         ConsoleLogger.show('info', `Version: ${details.version}`, '📜');
         ConsoleLogger.show('info', `Legacy: ${details.legacy ? 'yes' : 'no'}`, '🕰️');
         ConsoleLogger.show('info', `Compression: ${details.compression}`, '🗜️');
+        ConsoleLogger.show('info', `Keyfile: ${details.keyfile || 'disabled'}`, '🔑');
         ConsoleLogger.show('info', `KDF: ${details.kdf}`, '🧬');
         ConsoleLogger.show('info', `Iterations: ${details.iterations}`, '🔁');
         ConsoleLogger.show('info', `Salt length: ${details.saltLength}`, '🧂');
@@ -1078,7 +1185,8 @@ async function main() {
     }
 
     // Secure Password Input with Strength Indicator
-    if (!options.inspect && !options.password) {
+    // Only prompt for password if not provided (undefined), not if empty string was explicitly passed
+    if (!options.inspect && options.password === undefined) {
         // Only verify password when encrypting (not needed for decrypting)
         if (!options.decrypt) {
             options.password = await getpassVerifyWithStrength();
@@ -1091,13 +1199,28 @@ async function main() {
         ConsoleLogger.show('debug', 'Password provided via command line');
     }
 
+    // Handle key file
+    let keyfileData = null;
+    if (options.keyfile) {
+        ConsoleLogger.show('info', `Using key file: ${options.keyfile}`, '🔐');
+        keyfileData = readKeyfile(options.keyfile);
+        if (!keyfileData) {
+            ConsoleLogger.show('error', 'Failed to read key file');
+            ConsoleLogger.show('error', 'Operation aborted: Could not load key file');
+            process.exit(1);
+        }
+        ConsoleLogger.show('success', 'Key file loaded successfully');
+    } else {
+        ConsoleLogger.show('debug', 'No key file provided');
+    }
+
     if (options.text) {
         const startTime = Date.now();
 
         // Default to encrypt if decrypt is not explicitly set
         if (!options.decrypt) {
             ConsoleLogger.show('info', 'Encrypting text...');
-            const result = engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password);
+            const result = engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData);
             const b64Result = result.toString('base64');
             ConsoleLogger.show('success', `Encrypted (Base64): ${b64Result}`);
             const elapsed = (Date.now() - startTime) / 1000;
@@ -1109,7 +1232,7 @@ async function main() {
             ConsoleLogger.show('info', 'Decrypting text...');
             ConsoleLogger.show('debug', 'Decoding Base64 text input');
             const rawData = Buffer.from(options.text, 'base64');
-            const result = engine.decryptData(rawData, options.password);
+            const result = engine.decryptData(rawData, options.password, keyfileData);
             if (result) {
                 ConsoleLogger.show('success', `Decrypted: ${result.toString('utf-8')}`);
                 const elapsed = (Date.now() - startTime) / 1000;
@@ -1145,7 +1268,7 @@ async function main() {
 
                     const outPath = filePath + '.enc';
                     ConsoleLogger.show('info', `Processing: ${filePath}`, '📄');
-                    const result = await engine.encryptFile(filePath, outPath, options.password, options.compress);
+                    const result = await engine.encryptFile(filePath, outPath, options.password, options.compress, keyfileData);
                     if (result) {
                         successCount++;
                         const size = fs.statSync(outPath).size;
@@ -1163,7 +1286,7 @@ async function main() {
                     }
 
                     ConsoleLogger.show('info', `Processing: ${filePath}`, '📄');
-                    const result = await engine.decryptFile(filePath, outPath, options.password, options.compress);
+                    const result = await engine.decryptFile(filePath, outPath, options.password, options.compress, keyfileData);
                     if (result) {
                         successCount++;
                         const size = fs.statSync(outPath).size;
@@ -1209,14 +1332,15 @@ async function main() {
                 if (stat.isDirectory()) {
                     continue;
                 }
-                const defaultExt = options.decrypt ? '.dec' : '.enc';
                 const outputFile = options.output && targets.length === 1
                     ? options.output
-                    : (path.join(path.dirname(target), path.basename(target, path.extname(target))) + defaultExt);
+                    : (options.decrypt
+                        ? path.join(path.dirname(target), path.basename(target, '.enc') + '.dec')
+                        : target + '.enc');
 
                 const ok = !options.decrypt
-                    ? await engine.encryptFile(target, outputFile, options.password, options.compress)
-                    : await engine.decryptFile(target, outputFile, options.password, options.compress);
+                    ? await engine.encryptFile(target, outputFile, options.password, options.compress, keyfileData)
+                    : await engine.decryptFile(target, outputFile, options.password, options.compress, keyfileData);
 
                 if (ok) {
                     successCount++;

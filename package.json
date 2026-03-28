@@ -8,7 +8,7 @@
   },
   "scripts": {
     "start": "node crypt_tools.js",
-    "test": "node --test --test-reporter spec tests/",
+    "test": "node --test --test-reporter spec tests/*.test.js",
     "coverage": "c8 -r text -r html npm test",
     "test:all": "npm test && npm run coverage"
   },
