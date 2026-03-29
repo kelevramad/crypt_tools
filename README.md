@@ -18,6 +18,7 @@
 - **Inspect Mode**: View encrypted file metadata without decrypting it.
 - **Key File Support**: Generate and use key files for two-factor encryption (password + key file).
 - **Argon2 Support**: Modern Argon2id key derivation alternative with configurable iterations via `--kdf` and `--iterations` flags.
+- **Hidden volumes (containers)**: Optional two-password file container—decoy content with the outer password, sensitive content with the hidden password; similar in *goal* to VeraCrypt’s hidden volume, implemented as two `CT02` blobs plus a small `CTHV` footer (see limitations below).
 
 ## Installation
 
@@ -136,6 +137,31 @@ uv run crypt_tools.py --encrypt -f document.txt -p "your_password" --kdf argon2 
 uv run crypt_tools.py --decrypt -f document.enc -p "your_password"
 ```
 
+### Hidden volumes (plausible deniability)
+
+Create a single encrypted file that contains **two** independent AES-GCM payloads: an **outer/decoy** file (opened with the decoy password) and a **hidden** file (opened with the hidden password). On disk the layout is:
+
+`[CT02_outer][CT02_hidden][CTHV][8-byte big-endian outer length]`
+
+**Important:** This is **not** full-disk VeraCrypt semantics. The file is longer than a single-message ciphertext, and the `CTHV` footer is visible to anyone with the bytes. Deniability here means: under coercion, you can decrypt only the decoy with the decoy password; the real data needs the hidden password. It does **not** mean a forensic analyst cannot infer that a second blob may exist.
+
+- **Encrypt:** `-f` points to the **decoy** file; `--hidden-file` points to the **secret** payload. Use `--hidden-vol`. You will be prompted for two passwords (or use `--password-outer` and `--password-hidden`; passing secrets on the command line is convenient but exposes them in shell history).
+- **Decrypt decoy:** `-d -f <container> -p <decoy_password>` (default: decrypts only the outer blob when the file has a valid `CTHV` footer).
+- **Decrypt hidden:** `-d --hidden -f <container> -p <hidden_password>` (or `--password-hidden` instead of `-p`).
+- **Inspect:** `--inspect` reports `container: hidden`, outer/hidden blob sizes, and a short caveat when a footer is present.
+- **Restrictions:** Hidden mode applies to **one decoy file** at a time—no `--recursive`, no wildcard batches for `--hidden-vol`. Text mode does not support hidden containers.
+
+```bash
+# Encrypt decoy.txt + secret.bin → decoy.txt.enc (prompts for two passwords if omitted)
+uv run crypt_tools.py --encrypt -f decoy.txt --hidden-vol --hidden-file secret.bin
+
+# Decrypt outer only
+uv run crypt_tools.py --decrypt -f decoy.txt.enc -p "decoy_pw" -o out_decoy.txt
+
+# Decrypt hidden only
+uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_secret.bin
+```
+
 ### CLI Arguments
 
 | Argument | Short | Description |
@@ -157,6 +183,11 @@ uv run crypt_tools.py --decrypt -f document.enc -p "your_password"
 | `--debug` | — | Enable debug mode |
 | `--version` | `-V` | Show version |
 | `--help` | `-h` | Show help |
+| `--hidden-vol` | — | Encrypt decoy (`-f`) + hidden (`--hidden-file`) into one container |
+| `--hidden-file` | — | Path to hidden payload (requires `--hidden-vol`) |
+| `--hidden` | — | With `-d -f`, decrypt inner volume (`-p` = hidden password) |
+| `--password-outer` | — | Decoy password for `--hidden-vol` (optional) |
+| `--password-hidden` | — | Hidden password; with `-d --hidden` can be used instead of `-p` |
 
 **Wildcard tip (Windows/Powershell):** Use quotes like `"*.md"` to pass patterns without shell expansion.
 
@@ -181,7 +212,7 @@ uv run crypt_tools.py --decrypt -f document.enc -p "your_password"
 
 ## Technical Details
 
-### Version 2.3.0 Specifications
+### Version 2.4.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -191,6 +222,7 @@ This tool improves upon older implementations by:
 6.  **PBKDF2 Iterations**: **100,000** iterations for key derivation (default).
 7.  **Argon2id Support**: Modern KDF with **3** iterations, **64 MB** memory, and **4** parallelism (configurable via `--iterations`).
 8.  **Header Format**: New encrypted files include a fixed `CT02` header with flags, KDF ID, and KDF parameters.
+9.  **Hidden-volume containers** (optional): Two `CT02` blobs back-to-back, then a `CTHV` magic (4 bytes) plus 64-bit big-endian outer blob length (8 bytes). Same KDF/compression/keyfile options apply to both inner encrypts when creating a container.
 
 ### File Formats
 
@@ -210,6 +242,11 @@ This tool improves upon older implementations by:
 **Legacy File Format (still readable)**:
 ```
 [Salt (16 bytes)] + [Nonce (12 bytes)] + [Encrypted Content (Chunks)] + [GCM Tag (16 bytes)]
+```
+
+**Hidden-volume container (optional, file encryption only)**:
+```
+[CT02_outer] + [CT02_hidden] + [Magic "CTHV" (4 bytes)] + [uint64_be outer_total_len (8 bytes)]
 ```
 
 > **Note**: Files encrypted with the old MD5-based 1.x tool are still **not compatible** with this version. You must decrypt them using the old tool before migrating.
@@ -233,8 +270,10 @@ This tool improves upon older implementations by:
 | `encrypt_data(data, password)` | Encrypts bytes in memory |
 | `decrypt_data(enc_data, password)` | Decrypts bytes in memory |
 | `encrypt_file(input_path, output_path, password, compress)` | Encrypts file using streaming |
-| `decrypt_file(input_path, output_path, password, compress)` | Decrypts file using streaming |
-| `inspect_file(input_path)` | Reads encrypted file metadata without decrypting |
+| `decrypt_file(..., slice_start=0, slice_end=None)` | Decrypts file using streaming; optional byte range for blobs inside a larger file |
+| `encrypt_hidden_container(...)` | Builds `[CT02_outer][CT02_hidden][CTHV][length]` |
+| `decrypt_hidden_container(..., hidden=False)` | Decrypts outer or inner blob after footer validation |
+| `inspect_file(input_path)` | Reads encrypted file metadata without decrypting (includes hidden-container fields when applicable) |
 
 ## Error Handling
 - **Integrity Check**: Failed decryption indicates wrong password or corrupted file
@@ -294,4 +333,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.3.0
+**Version**: 2.4.0

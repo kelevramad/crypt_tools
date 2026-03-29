@@ -19,6 +19,7 @@
 - **Inspect Mode**: View encrypted file metadata without decrypting it.
 - **Key File Support**: Generate and use key files for two-factor encryption (password + key file).
 - **Argon2 Support**: Modern Argon2id key derivation alternative with configurable iterations via `--kdf` and `--iterations` flags.
+- **Hidden volumes (containers)**: Optional two-password file container—decoy content with the outer password, sensitive content with the hidden password; two `CT02` blobs plus a `CTHV` footer (see limitations in [README.md](README.md) hidden-volume section).
 
 ## Installation
 
@@ -134,6 +135,17 @@ node crypt_tools.js --encrypt -f document.txt -p "your_password" --kdf argon2 --
 node crypt_tools.js --decrypt -f document.enc -p "your_password"
 ```
 
+### Hidden volumes (plausible deniability)
+
+Behavior matches the Python CLI: outer and hidden payloads are separate `CT02` messages; the file ends with `CTHV` plus the outer blob length. This is a **file** feature, not full-disk VeraCrypt; the footer and file length are visible. Use `--hidden-vol` with `-f` (decoy) and `--hidden-file` (secret). Decrypt outer with `-d -p`; decrypt hidden with `-d --hidden -p`. No `--recursive`/wildcards for `--hidden-vol`. See [README.md](README.md) for the full format diagram and caveats.
+
+```bash
+node crypt_tools.js --encrypt -f decoy.txt --hidden-vol --hidden-file secret.bin --password-outer "decoy_pw" --password-hidden "real_pw"
+node crypt_tools.js --decrypt -f decoy.txt.enc -p "decoy_pw" -o out_decoy.txt
+node crypt_tools.js --decrypt --hidden -f decoy.txt.enc -p "real_pw" -o out_secret.bin
+node crypt_tools.js --inspect -f decoy.txt.enc
+```
+
 ### CLI Arguments
 
 | Argument | Short | Description |
@@ -155,6 +167,11 @@ node crypt_tools.js --decrypt -f document.enc -p "your_password"
 | `--debug` | — | Enable debug mode |
 | `--version` | `-V` | Show version |
 | `--help` | `-h` | Show help |
+| `--hidden-vol` | — | Encrypt decoy (`-f`) + hidden (`--hidden-file`) into one container |
+| `--hidden-file` | — | Path to hidden payload (requires `--hidden-vol`) |
+| `--hidden` | — | With `-d -f`, decrypt inner volume (`-p` = hidden password) |
+| `--password-outer` | — | Decoy password for `--hidden-vol` (optional) |
+| `--password-hidden` | — | Hidden password; with `-d --hidden` can be used instead of `-p` |
 
 **Wildcard tip (Windows/Powershell):** Use quotes like `"*.md"` to pass patterns without shell expansion.
 
@@ -179,7 +196,7 @@ node crypt_tools.js --decrypt -f document.enc -p "your_password"
 
 ## Technical Details
 
-### Version 2.3.0 Specifications
+### Version 2.4.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -189,6 +206,7 @@ This tool improves upon older implementations by:
 6.  **PBKDF2 Iterations**: **100,000** iterations for key derivation (default).
 7.  **Argon2id Support**: Modern KDF with **3** iterations, **64 MB** memory, and **4** parallelism (configurable via `--iterations`).
 8.  **Header Format**: New encrypted files include a fixed `CT02` header with flags, KDF ID, and KDF parameters.
+9.  **Hidden-volume containers** (optional): Two `CT02` blobs, then `CTHV` + 64-bit big-endian outer length; same options apply to both layers when creating a container.
 
 ### File Formats
 
@@ -208,6 +226,11 @@ This tool improves upon older implementations by:
 **Legacy File Format (still readable)**:
 ```
 [Salt (16 bytes)] + [Nonce (12 bytes)] + [Encrypted Content (Chunks)] + [GCM Tag (16 bytes)]
+```
+
+**Hidden-volume container (optional, file encryption only)**:
+```
+[CT02_outer] + [CT02_hidden] + [Magic "CTHV" (4 bytes)] + [uint64_be outer_total_len (8 bytes)]
 ```
 
 > **Note**: Files encrypted with the old MD5-based 1.x tool are still **not compatible** with this version. You must decrypt them using the old tool before migrating.
@@ -231,8 +254,10 @@ This tool improves upon older implementations by:
 | `encryptData(data, password)` | Encrypts bytes in memory |
 | `decryptData(encData, password)` | Decrypts bytes in memory |
 | `encryptFile(inputPath, outputPath, password, compress)` | Encrypts file using streaming |
-| `decryptFile(inputPath, outputPath, password, compress)` | Decrypts file using streaming |
-| `inspectFile(inputPath)` | Reads encrypted file metadata without decrypting |
+| `decryptFile(..., sliceStart, sliceEnd)` | Decrypts a blob; optional byte range for containers |
+| `encryptHiddenContainer(...)` | Builds `[CT02_outer][CT02_hidden][CTHV][length]` |
+| `decryptHiddenContainer(..., { hidden })` | Decrypts outer or inner after footer validation |
+| `inspectFile(inputPath)` | Metadata without decrypting (hidden-container fields when applicable) |
 
 ## Error Handling
 - **Integrity Check**: Failed decryption indicates wrong password or corrupted file
@@ -274,4 +299,4 @@ ncc build crypt_tools.js -o dist
 ---
 
 **Author**: Center For Cyber Intelligence
-**Version**: 2.3.0
+**Version**: 2.4.0

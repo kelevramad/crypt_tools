@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.3.0 |
+| **Version** | 2.4.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -51,6 +51,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **Visual Feedback** | Progress bars, color-coded logs with emojis, ASCII banners |
 | **File Logging** | Optional timestamped log file for audit trail |
 | **Key File Support** | Generate and use key files for two-factor encryption |
+| **Hidden volumes (containers)** | Optional two-layer file: decoy payload (outer password) + real payload (hidden password); `CTHV` footer marks split; file-only, not full-disk VeraCrypt semantics |
 
 ### 3.2 Security Features
 
@@ -67,6 +68,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **Password Verification** | Required for encryption (double-entry) |
 | **Integrity Verification** | Automatic GCM tag verification on decryption |
 | **Key File Support** | 32-byte random key files for two-factor encryption |
+| **Hidden-volume container** | Two concatenated `CT02` blobs plus plaintext `CTHV` + 8-byte big-endian outer length footer; wrong password on outer decrypt fails; hidden decrypt uses inner range only |
 
 ---
 
@@ -87,6 +89,16 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 ```
 
 **Current Overhead (PBKDF2 / CT02):** 60 bytes per encrypted file
+
+**Hidden-volume container (optional, file mode only):**
+
+```text
+[CT02_outer][CT02_hidden][FOOTER_MAGIC "CTHV" (4 bytes)][uint64_be outer_total_len]
+```
+
+- `outer_total_len` is the byte length of the entire first `CT02` object (header through outer GCM tag). The second `CT02` (hidden) immediately follows; the 12-byte footer is appended last.
+- This is **not** identical to VeraCrypt: the footer and extra file length are visible; plausible deniability is “coercion / wrong password opens decoy,” not “analyst thinks the file is a single ciphertext only.”
+- Text/Base64 mode does not support hidden containers.
 
 ### 4.2 Architecture
 
@@ -141,6 +153,11 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--debug` | — | Enable debug logging | Disabled |
 | `--version` | `-V` | Show version | — |
 | `--help` | `-h` | Show help | — |
+| `--hidden-vol` | — | Encrypt decoy (`-f`) + hidden (`--hidden-file`) into one container | No |
+| `--hidden-file` | — | Path to hidden payload (requires `--hidden-vol`) | None |
+| `--hidden` | — | With `-d -f`, decrypt inner volume (password is hidden password) | No |
+| `--password-outer` | — | Decoy password for `--hidden-vol` (optional; CLI exposure is insecure) | None |
+| `--password-hidden` | — | Hidden password for `--hidden-vol`; with `-d --hidden` can replace `-p` | None |
 
 ### 5.2 Example Commands
 
@@ -195,6 +212,15 @@ uv run crypt_tools.py --encrypt -f document.txt -p "password" --kdf argon2 --ite
 
 # Decrypt file encrypted with Argon2 (auto-detected from file header)
 uv run crypt_tools.py --decrypt -f document.enc -p "password"
+
+# Hidden volume: encrypt decoy + secret into one container (single decoy file, no wildcards/recursive)
+uv run crypt_tools.py --encrypt -f decoy.txt --hidden-vol --hidden-file secret.bin --password-outer "decoy_pw" --password-hidden "real_pw"
+
+# Decrypt decoy (outer) only
+uv run crypt_tools.py --decrypt -f decoy.txt.enc -p "decoy_pw" -o recovered_decoy.txt
+
+# Decrypt hidden (inner) payload
+uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "real_pw" -o recovered_secret.bin
 ```
 
 ---
@@ -214,6 +240,7 @@ uv run crypt_tools.py --decrypt -f document.enc -p "password"
 | CLI Integration | ✓ Argument parsing, password prompts |
 | Password Mismatch | ✓ Exit on verification failure |
 | Recursive Processing | ✓ Directory tree handling |
+| Hidden-volume containers | ✓ Round-trip outer/hidden, footer parse, inspect metadata |
 
 ### 6.2 Testing Commands
 
@@ -254,6 +281,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 | **Interactive Mode** | Requires terminal for password prompts |
 | **Memory** | Chunk-based but requires ~64KB buffer |
 | **Log File** | Log file accumulates entries; manual cleanup required |
+| **Hidden volumes** | `--hidden-vol` is single-file only; no wildcards or `--recursive`; footer is visible forensically |
 
 ---
 
@@ -271,6 +299,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.4.0 | 2026-03-28 | Hidden-volume containers (`--hidden-vol`, `--hidden-file`, `-d --hidden`, `CTHV` footer), `decrypt_file` byte-range slices, inspect reports container metadata; Python and Node parity |
 | 2.3.0 | 2026-03-27 | Version bump for development |
 | 2.2.0 | 2026-03-27 | Added Argon2id key derivation (`--kdf argon2`, `--iterations`), key file support (`--generate-keyfile`, `--keyfile`), `CT02` format header, inspect mode, and automatic compression detection for new files |
 | 2.1.0 | 2026-03-16 | Minor version update, encoding fixes |
@@ -284,11 +313,14 @@ uv run pytest --cov=crypt_tools --cov-report=html
 ### 11.1 File Structure
 ```
 crypt_tools/
-├── crypt_tools.py          # Main application
+├── crypt_tools.py          # Main application (Python)
+├── crypt_tools.js          # Node.js edition (parity CLI)
 ├── tests/
-│   └── test_crypt_tools.py # Test suite
+│   ├── test_crypt_tools.py # Python test suite
+│   └── crypt_tools_cli.test.js # Node CLI tests
 ├── pyproject.toml          # Project configuration
 ├── README.md               # User documentation
+├── README_NODEJS.md        # Node.js user documentation
 └── pytest.ini              # Test configuration
 ```
 
@@ -298,5 +330,5 @@ crypt_tools/
 
 ---
 
-**Document Version:** 1.3
-**Last Updated:** March 26, 2026
+**Document Version:** 1.4
+**Last Updated:** March 28, 2026
