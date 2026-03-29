@@ -8,7 +8,14 @@ import runpy
 import types
 import sys
 import builtins
-from crypt_tools import CryptoEngine, Config, ConsoleLogger, TerminalColors, main
+from crypt_tools import (
+	CryptoEngine,
+	Config,
+	ConsoleLogger,
+	TerminalColors,
+	main,
+	parse_hidden_container_footer_from_path,
+)
 
 
 @pytest.fixture
@@ -107,6 +114,128 @@ def test_file_encryption_decryption(engine):
 
 	finally:
 		for p in [input_path, enc_path, dec_path]:
+			if os.path.exists(p):
+				os.remove(p)
+
+
+def test_hidden_container_roundtrip(engine):
+	"""Hidden volume: outer decrypt yields decoy; inner decrypt yields secret."""
+	pw_outer = 'decoy_pass_12345'
+	pw_hidden = 'hidden_pass_67890'
+	decoy = b'Decoy benign content'
+	secret = b'SECRET_REAL_DATA'
+
+	fd_d, decoy_path = tempfile.mkstemp(suffix='.txt')
+	os.close(fd_d)
+	fd_s, secret_path = tempfile.mkstemp(suffix='.bin')
+	os.close(fd_s)
+	cont_path = decoy_path + '.container'
+	out_decoy = decoy_path + '.out'
+	out_secret = secret_path + '.out'
+
+	try:
+		with open(decoy_path, 'wb') as f:
+			f.write(decoy)
+		with open(secret_path, 'wb') as f:
+			f.write(secret)
+
+		assert engine.encrypt_hidden_container(
+			decoy_path,
+			secret_path,
+			cont_path,
+			pw_outer,
+			pw_hidden,
+			False,
+			None,
+			Config.KDF_PBKDF2,
+			Config.PBKDF2_ITERATIONS,
+		)
+		assert os.path.getsize(cont_path) > os.path.getsize(decoy_path) + os.path.getsize(secret_path)
+
+		info = parse_hidden_container_footer_from_path(cont_path)
+		assert info is not None
+		assert info['outerTotalLen'] > 0
+		assert info['hiddenLen'] > 0
+
+		details = engine.inspect_file(cont_path)
+		assert details['container'] == 'hidden'
+		assert details['outerBlobSize'] == info['outerTotalLen']
+		assert details['hiddenBlobSize'] == info['hiddenLen']
+
+		assert engine.decrypt_hidden_container(
+			cont_path, out_decoy, pw_outer, hidden=False, compress=False, keyfile_data=None
+		)
+		with open(out_decoy, 'rb') as f:
+			assert f.read() == decoy
+
+		assert engine.decrypt_hidden_container(
+			cont_path, out_secret, pw_hidden, hidden=True, compress=False, keyfile_data=None
+		)
+		with open(out_secret, 'rb') as f:
+			assert f.read() == secret
+	finally:
+		for p in (
+			decoy_path,
+			secret_path,
+			cont_path,
+			out_decoy,
+			out_secret,
+		):
+			if os.path.exists(p):
+				try:
+					os.remove(p)
+				except OSError:
+					pass
+
+
+def test_hidden_container_outer_fails_with_hidden_password(engine):
+	pw_outer = 'outer_XXXX'
+	pw_hidden = 'hidden_YYYY'
+	tmp = tempfile.mkdtemp()
+	decoy_path = os.path.join(tmp, 'decoy.txt')
+	secret_path = os.path.join(tmp, 'secret.bin')
+	cont_path = os.path.join(tmp, 'ctr.enc')
+	out_path = os.path.join(tmp, 'out.txt')
+	try:
+		with open(decoy_path, 'wb') as f:
+			f.write(b'decoy')
+		with open(secret_path, 'wb') as f:
+			f.write(b'secret')
+		assert engine.encrypt_hidden_container(
+			decoy_path, secret_path, cont_path, pw_outer, pw_hidden
+		)
+		assert not engine.decrypt_hidden_container(
+			cont_path, out_path, pw_hidden, hidden=False, compress=False, keyfile_data=None
+		)
+		assert not os.path.exists(out_path)
+	finally:
+		for p in (decoy_path, secret_path, cont_path, out_path):
+			if os.path.exists(p):
+				try:
+					os.remove(p)
+				except OSError:
+					pass
+		try:
+			os.rmdir(tmp)
+		except OSError:
+			pass
+
+
+def test_parse_footer_returns_none_for_standard_file(engine):
+	password = 'std'
+	content = b'only one layer'
+	fd, input_path = tempfile.mkstemp()
+	os.close(fd)
+	enc_path = input_path + '.enc'
+	try:
+		with open(input_path, 'wb') as f:
+			f.write(content)
+		assert engine.encrypt_file(input_path, enc_path, password)
+		assert parse_hidden_container_footer_from_path(enc_path) is None
+		meta = engine.inspect_file(enc_path)
+		assert meta['container'] == 'standard'
+	finally:
+		for p in (input_path, enc_path):
 			if os.path.exists(p):
 				os.remove(p)
 

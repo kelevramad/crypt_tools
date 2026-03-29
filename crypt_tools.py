@@ -16,6 +16,7 @@ import getpass
 import io
 import re
 import glob
+import tempfile
 from enum import StrEnum
 from typing import Optional
 
@@ -55,7 +56,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.3.0'
+	VERSION = '2.4.0'
 
 	# File format
 	MAGIC = b'CT02'
@@ -66,6 +67,10 @@ class Config:
 	KDF_PBKDF2 = 0x01
 	KDF_ARGON2 = 0x02
 	FIXED_HEADER_SIZE = 16
+
+	# Hidden-volume container: [CT02_outer][CT02_hidden][FOOTER_MAGIC][uint64_be outer_total_len]
+	CONTAINER_FOOTER_MAGIC = b'CTHV'
+	CONTAINER_FOOTER_SIZE = 12
 
 	# Argon2id defaults (recommended for password hashing)
 	ARGON2_MEMORY_COST = 65536  # 64 MB
@@ -338,6 +343,53 @@ def _parse_format_from_bytes(data: bytes, *, text_payload: bool = False) -> dict
 	if len(data) >= 4 and data[:4] == Config.MAGIC:
 		return _parse_ct02_header_from_bytes(data)
 	return _parse_legacy_header(text_payload=text_payload)
+
+
+def parse_hidden_container_footer_from_path(path: str) -> Optional[dict]:
+	"""
+	Parse hidden-volume container footer from the end of a file.
+	Layout: ... [CT02_outer][CT02_hidden][CTHV][uint64_be outer_total_len]
+	Returns dict with outerTotalLen, hiddenStart, hiddenLen, fileSize or None.
+	"""
+	try:
+		file_size = os.path.getsize(path)
+	except OSError:
+		return None
+
+	min_blob = Config.FIXED_HEADER_SIZE + Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
+	if file_size < min_blob * 2 + Config.CONTAINER_FOOTER_SIZE:
+		return None
+
+	with open(path, 'rb') as f:
+		f.seek(-Config.CONTAINER_FOOTER_SIZE, os.SEEK_END)
+		footer = f.read(Config.CONTAINER_FOOTER_SIZE)
+
+	if len(footer) != Config.CONTAINER_FOOTER_SIZE:
+		return None
+	if footer[:4] != Config.CONTAINER_FOOTER_MAGIC:
+		return None
+
+	outer_total_len = int.from_bytes(footer[4:12], byteorder='big', signed=False)
+	if outer_total_len <= 0 or outer_total_len >= file_size - Config.CONTAINER_FOOTER_SIZE:
+		return None
+
+	hidden_start = outer_total_len
+	hidden_len = file_size - Config.CONTAINER_FOOTER_SIZE - outer_total_len
+	if hidden_len < min_blob:
+		return None
+
+	with open(path, 'rb') as f:
+		f.seek(hidden_start)
+		magic_check = f.read(4)
+		if magic_check != Config.MAGIC:
+			return None
+
+	return {
+		'outerTotalLen': outer_total_len,
+		'hiddenStart': hidden_start,
+		'hiddenLen': hidden_len,
+		'fileSize': file_size,
+	}
 
 
 # =========================
@@ -661,18 +713,27 @@ class CryptoEngine:
 		password: str,
 		compress: bool = False,
 		keyfile_data: Optional[bytes] = None,
+		*,
+		slice_start: int = 0,
+		slice_end: Optional[int] = None,
 	) -> bool:
 		"""
 		Decrypts a file using streaming.
 		Supports:
 		- v2.2: [HEADER] + [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
 		- legacy file: [SALT] + [NONCE] + [CIPHERTEXT] + [TAG]
+		Optional slice_start/slice_end decrypt one CT02 blob inside a larger file (hidden volume).
 		"""
 		try:
-			file_size = os.path.getsize(input_path)
+			file_size_on_disk = os.path.getsize(input_path)
+			end = file_size_on_disk if slice_end is None else slice_end
+			if slice_start < 0 or end > file_size_on_disk or slice_start >= end:
+				raise ValueError('Invalid decrypt byte range')
+
+			file_size = end - slice_start
 			ConsoleLogger.show(
 				'debug',
-				f'Starting file decryption: {input_path} (size: {self._format_size(file_size)}) -> {output_path}',
+				f'Starting file decryption: {input_path} (blob size: {self._format_size(file_size)}) -> {output_path}',
 			)
 			minimum_overhead = Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
 
@@ -683,10 +744,13 @@ class CryptoEngine:
 				raise ValueError('File too small')
 
 			with open(input_path, 'rb') as fin:
+				fin.seek(slice_start)
 				prefix = fin.read(Config.FIXED_HEADER_SIZE)
 				metadata = _parse_format_from_bytes(prefix, text_payload=False)
 				if metadata['is_legacy']:
-					fin.seek(0)
+					if slice_start != 0:
+						raise ValueError('Legacy format does not support container slices')
+					fin.seek(slice_start)
 					effective_compress = compress
 				else:
 					if len(prefix) < metadata['header_len']:
@@ -728,12 +792,16 @@ class CryptoEngine:
 					'debug', f'Ciphertext length to decrypt: {self._format_size(ciphertext_len)}'
 				)
 
-				desc = '[🔓] Decrypting & Decompressing' if compress else '[🔓] Decrypting'
+				desc = (
+					'[🔓] Decrypting & Decompressing'
+					if effective_compress
+					else '[🔓] Decrypting'
+				)
 				with (
 					open(output_path, 'wb') as fout,
 					tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc=desc) as pbar,
 				):
-					decompressor = zlib.decompressobj() if compress else None
+					decompressor = zlib.decompressobj() if effective_compress else None
 					bytes_read = 0
 
 					while bytes_read < ciphertext_len:
@@ -789,6 +857,126 @@ class CryptoEngine:
 					pass
 			return False
 
+	def encrypt_hidden_container(
+		self,
+		decoy_input_path: str,
+		hidden_input_path: str,
+		output_path: str,
+		password_outer: str,
+		password_hidden: str,
+		compress: bool = False,
+		keyfile_data: Optional[bytes] = None,
+		kdf_type: int = Config.KDF_PBKDF2,
+		iterations: int = Config.PBKDF2_ITERATIONS,
+	) -> bool:
+		"""Create [CT02_outer][CT02_hidden][CTHV][uint64 outer_len]."""
+		tmp_outer = None
+		tmp_hidden = None
+		try:
+			fd_o, tmp_outer = tempfile.mkstemp(prefix='ct_outer_', suffix='.enc')
+			os.close(fd_o)
+			fd_h, tmp_hidden = tempfile.mkstemp(prefix='ct_hidden_', suffix='.enc')
+			os.close(fd_h)
+
+			if not self.encrypt_file(
+				decoy_input_path,
+				tmp_outer,
+				password_outer,
+				compress,
+				keyfile_data,
+				kdf_type,
+				iterations,
+			):
+				return False
+			if not self.encrypt_file(
+				hidden_input_path,
+				tmp_hidden,
+				password_hidden,
+				compress,
+				keyfile_data,
+				kdf_type,
+				iterations,
+			):
+				return False
+
+			outer_len = os.path.getsize(tmp_outer)
+			hidden_len = os.path.getsize(tmp_hidden)
+			with open(tmp_outer, 'rb') as fo, open(tmp_hidden, 'rb') as fh, open(
+				output_path, 'wb'
+			) as out:
+				while True:
+					blk = fo.read(Config.CHUNK_SIZE)
+					if not blk:
+						break
+					out.write(blk)
+				while True:
+					blk = fh.read(Config.CHUNK_SIZE)
+					if not blk:
+						break
+					out.write(blk)
+				out.write(Config.CONTAINER_FOOTER_MAGIC)
+				out.write(outer_len.to_bytes(8, byteorder='big', signed=False))
+
+			ConsoleLogger.show(
+				'success',
+				f'Hidden container written ({self._format_size(outer_len + hidden_len + Config.CONTAINER_FOOTER_SIZE)})',
+			)
+			return True
+		except Exception as e:
+			ConsoleLogger.show('error', f'Hidden container encryption error: {e}')
+			if os.path.exists(output_path):
+				try:
+					os.remove(output_path)
+				except OSError:
+					pass
+			return False
+		finally:
+			for p in (tmp_outer, tmp_hidden):
+				if p and os.path.exists(p):
+					try:
+						os.remove(p)
+					except OSError:
+						pass
+
+	def decrypt_hidden_container(
+		self,
+		input_path: str,
+		output_path: str,
+		password: str,
+		*,
+		hidden: bool = False,
+		compress: bool = False,
+		keyfile_data: Optional[bytes] = None,
+	) -> bool:
+		info = parse_hidden_container_footer_from_path(input_path)
+		if not info:
+			ConsoleLogger.show(
+				'error',
+				'Not a hidden-volume container (missing or invalid CTHV footer).',
+			)
+			return False
+
+		if hidden:
+			return self.decrypt_file(
+				input_path,
+				output_path,
+				password,
+				compress,
+				keyfile_data,
+				slice_start=info['hiddenStart'],
+				slice_end=info['fileSize'] - Config.CONTAINER_FOOTER_SIZE,
+			)
+
+		return self.decrypt_file(
+			input_path,
+			output_path,
+			password,
+			compress,
+			keyfile_data,
+			slice_start=0,
+			slice_end=info['outerTotalLen'],
+		)
+
 	def inspect_file(self, input_path: str) -> dict:
 		"""
 		Inspect an encrypted file and return metadata without decrypting.
@@ -798,10 +986,13 @@ class CryptoEngine:
 			raise FileNotFoundError(f"ENOENT: no such file or directory, stat '{input_path}'")
 
 		file_size = os.path.getsize(input_path)
+		footer_info = parse_hidden_container_footer_from_path(input_path)
+		outer_span = footer_info['outerTotalLen'] if footer_info else file_size
+
 		prefix = None
 
 		with open(input_path, 'rb') as fin:
-			prefix = fin.read(min(file_size, Config.FIXED_HEADER_SIZE))
+			prefix = fin.read(min(outer_span, Config.FIXED_HEADER_SIZE))
 
 		if prefix is None or len(prefix) < Config.FIXED_HEADER_SIZE:
 			raise ValueError('File is too small to inspect')
@@ -822,11 +1013,11 @@ class CryptoEngine:
 		nonce_len = metadata['nonce_len']
 		tag_len = metadata['tag_len']
 
-		ciphertext_size = file_size - header_len - salt_len - nonce_len - tag_len
-		if ciphertext_size < 0:
+		ciphertext_size_outer = outer_span - header_len - salt_len - nonce_len - tag_len
+		if ciphertext_size_outer < 0:
 			raise ValueError('Invalid encrypted file structure')
 
-		return {
+		result = {
 			'format': metadata['format'],
 			'version': metadata['version'],
 			'legacy': metadata['is_legacy'],
@@ -845,8 +1036,19 @@ class CryptoEngine:
 			'tagLength': tag_len,
 			'headerLength': header_len,
 			'fileSize': file_size,
-			'ciphertextSize': ciphertext_size,
+			'ciphertextSize': ciphertext_size_outer,
+			'container': 'hidden' if footer_info else 'standard',
 		}
+
+		if footer_info:
+			result['outerBlobSize'] = footer_info['outerTotalLen']
+			result['hiddenBlobSize'] = footer_info['hiddenLen']
+			result['footerNote'] = (
+				'CTHV/Ciphertext. This file embeds a second encrypted blob; '
+				'deniability vs forensic analysis is limited versus full-disk hidden volumes.'
+			)
+
+		return result
 
 
 # =========================
@@ -1263,7 +1465,10 @@ def parse_args(argv=None):
 			'    (equivalent to .\\temp\\**\\*.txt).\n'
 			'  - Password prompts show a live strength indicator.\n'
 			'  - Key file support: Use --keyfile to encrypt/decrypt with a key file.\n'
-			'    Combining password + keyfile provides two-factor encryption.'
+			'    Combining password + keyfile provides two-factor encryption.\n'
+			'  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.\n'
+			'    This is not identical to VeraCrypt: the footer and extra length are visible forensically;\n'
+			'    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”'
 		),
 		formatter_class=argparse.RawTextHelpFormatter,
 	)
@@ -1299,6 +1504,30 @@ def parse_args(argv=None):
 		help='Key file path for encryption/decryption (use with or without password)',
 	)
 	parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
+	parser.add_argument(
+		'--hidden-vol',
+		action='store_true',
+		help='Encrypt decoy (-f) and hidden (--hidden-file) into one container (single file only)',
+	)
+	parser.add_argument(
+		'--hidden-file',
+		help='Hidden payload path (requires --hidden-vol on encrypt)',
+	)
+	parser.add_argument(
+		'--hidden',
+		action='store_true',
+		help='With -d -f, decrypt inner/hidden volume (password is the hidden password)',
+	)
+	parser.add_argument(
+		'--password-outer',
+		default=None,
+		help='Decoy password for --hidden-vol (optional; exposing via CLI is insecure)',
+	)
+	parser.add_argument(
+		'--password-hidden',
+		default=None,
+		help='Hidden password for --hidden-vol; with -d --hidden can be used instead of -p',
+	)
 	parser.add_argument(
 		'-r',
 		'--recursive',
@@ -1346,6 +1575,28 @@ def main(argv=None):
 		ConsoleLogger.show('error', '--inspect only supports --file input')
 		sys.exit(1)
 
+	if args.hidden_vol and args.text:
+		ConsoleLogger.show('error', '--hidden-vol applies only to file encryption')
+		sys.exit(1)
+	if args.hidden_vol and args.decrypt:
+		ConsoleLogger.show('error', '--hidden-vol is for encryption only')
+		sys.exit(1)
+	if args.hidden_vol and args.inspect:
+		ConsoleLogger.show('error', '--hidden-vol cannot be used with --inspect')
+		sys.exit(1)
+	if args.hidden_file and not args.hidden_vol:
+		ConsoleLogger.show('error', '--hidden-file requires --hidden-vol')
+		sys.exit(1)
+	if args.hidden_vol and not args.hidden_file:
+		ConsoleLogger.show('error', '--hidden-vol requires --hidden-file')
+		sys.exit(1)
+	if args.hidden and not args.decrypt:
+		ConsoleLogger.show('error', '--hidden requires decrypt mode (-d)')
+		sys.exit(1)
+	if args.hidden and args.text:
+		ConsoleLogger.show('error', '--hidden applies only to file decryption')
+		sys.exit(1)
+
 	# Enable logging FIRST if --log flag is set
 	if args.log:
 		ConsoleLogger.LOG_ENABLED = True
@@ -1391,6 +1642,28 @@ def main(argv=None):
 		else:
 			file_list = [args.file]
 
+	if args.hidden_vol:
+		if not args.file:
+			ConsoleLogger.show('error', '--hidden-vol requires -f/--file (decoy path)')
+			sys.exit(1)
+		if args.recursive:
+			ConsoleLogger.show('error', '--hidden-vol cannot be used with --recursive')
+			sys.exit(1)
+		wc = any(ch in args.file for ch in ['*', '?', '[', ']'])
+		if wc or (file_list and len(file_list) != 1):
+			ConsoleLogger.show(
+				'error',
+				'--hidden-vol requires a single decoy file (no wildcards or multi-file batch)',
+			)
+			sys.exit(1)
+		decoy_p = file_list[0]
+		if not os.path.isfile(decoy_p):
+			ConsoleLogger.show('error', 'Decoy path must be a regular file for --hidden-vol')
+			sys.exit(1)
+		if not os.path.isfile(args.hidden_file):
+			ConsoleLogger.show('error', f'Hidden file not found: {args.hidden_file}')
+			sys.exit(1)
+
 	if args.inspect:
 		target_file = (file_list and file_list[0]) if file_list else args.file
 
@@ -1428,6 +1701,24 @@ def main(argv=None):
 		ConsoleLogger.show('info', f'Header length: {details["headerLength"]}', icon='🧱')
 		ConsoleLogger.show('info', f'File size: {details["fileSize"]} bytes', icon='📦')
 		ConsoleLogger.show('info', f'Ciphertext size: {details["ciphertextSize"]} bytes', icon='🔐')
+		if details.get('container') == 'hidden':
+			ConsoleLogger.show(
+				'info',
+				'Container: hidden (outer CT02 + inner CT02 + CTHV footer)',
+				icon='🫥',
+			)
+			ConsoleLogger.show(
+				'info',
+				f'Outer blob size: {details["outerBlobSize"]} bytes',
+				icon='📦',
+			)
+			ConsoleLogger.show(
+				'info',
+				f'Hidden blob size: {details["hiddenBlobSize"]} bytes',
+				icon='📦',
+			)
+			if details.get('footerNote'):
+				ConsoleLogger.show('warning', details['footerNote'])
 		end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
 		ConsoleLogger.show('info', f'Session ended at {end_timestamp}', icon='🏁')
 		if ConsoleLogger.LOG_ENABLED:
@@ -1569,17 +1860,39 @@ def main(argv=None):
 
 	ConsoleLogger.show('important', f'KDF: {args.kdf} ({iterations} iterations)', icon='🧬')
 
+	pw_outer = args.password_outer
+	pw_hidden = args.password_hidden
+
 	# Secure Password Input with Strength Indicator
 	# Only prompt for password if not provided (None), not if empty string was explicitly passed
-	if args.password is None:
-		# Only verify password when encrypting (not needed for decrypting)
-		if not args.decrypt:
+	if args.hidden_vol:
+		if pw_outer is None:
+			pw_outer = getpass_verify_with_strength(
+				'Enter decoy (outer) password: ',
+				'Verify decoy (outer) password: ',
+			)
+			ConsoleLogger.show('info', 'Decoy password entered', icon='🔑')
+		else:
+			ConsoleLogger.show('debug', 'Decoy password provided via command line')
+		if pw_hidden is None:
+			pw_hidden = getpass_verify_with_strength(
+				'Enter hidden volume password: ',
+				'Verify hidden volume password: ',
+			)
+			ConsoleLogger.show('info', 'Hidden volume password entered', icon='🔑')
+		else:
+			ConsoleLogger.show('debug', 'Hidden password provided via command line')
+	elif args.password is None and not args.inspect:
+		if args.decrypt and args.hidden and args.password_hidden is not None:
+			args.password = args.password_hidden
+			ConsoleLogger.show('debug', 'Using --password-hidden for inner decrypt')
+		elif not args.decrypt:
 			args.password = getpass_verify_with_strength()
 			ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
 		else:
 			args.password = getpass_with_strength()
 			ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
-	else:
+	elif not args.inspect:
 		ConsoleLogger.show('debug', 'Password provided via command line')
 
 	if args.text:
@@ -1675,9 +1988,28 @@ def main(argv=None):
 							out_path = file_path + '.dec'
 
 						ConsoleLogger.show('info', f'Processing: {file_path}', icon='📄')
-						if engine.decrypt_file(
-							file_path, out_path, args.password, args.compress, keyfile_data
-						):
+						foot = parse_hidden_container_footer_from_path(file_path)
+						if foot:
+							ok_batch = engine.decrypt_hidden_container(
+								file_path,
+								out_path,
+								args.password,
+								hidden=args.hidden,
+								compress=args.compress,
+								keyfile_data=keyfile_data,
+							)
+						elif args.hidden:
+							ConsoleLogger.show(
+								'error',
+								f'--hidden only applies to CTHV containers: {file_path}',
+								icon='❌',
+							)
+							ok_batch = False
+						else:
+							ok_batch = engine.decrypt_file(
+								file_path, out_path, args.password, args.compress, keyfile_data
+							)
+						if ok_batch:
 							success_count += 1
 							ConsoleLogger.show(
 								'success',
@@ -1726,21 +2058,50 @@ def main(argv=None):
 						output_file = target + '.enc'
 					else:
 						output_file = os.path.splitext(target)[0] + '.dec'
-				ok = (
-					engine.encrypt_file(
-						target,
-						output_file,
-						args.password,
-						args.compress,
-						keyfile_data,
-						kdf_type,
-						iterations,
-					)
-					if not args.decrypt
-					else engine.decrypt_file(
-						target, output_file, args.password, args.compress, keyfile_data
-					)
-				)
+				if not args.decrypt:
+					if args.hidden_vol:
+						ok = engine.encrypt_hidden_container(
+							target,
+							args.hidden_file,
+							output_file,
+							pw_outer,
+							pw_hidden,
+							args.compress,
+							keyfile_data,
+							kdf_type,
+							iterations,
+						)
+					else:
+						ok = engine.encrypt_file(
+							target,
+							output_file,
+							args.password,
+							args.compress,
+							keyfile_data,
+							kdf_type,
+							iterations,
+						)
+				else:
+					foot = parse_hidden_container_footer_from_path(target)
+					if foot:
+						ok = engine.decrypt_hidden_container(
+							target,
+							output_file,
+							args.password,
+							hidden=args.hidden,
+							compress=args.compress,
+							keyfile_data=keyfile_data,
+						)
+					elif args.hidden:
+						ConsoleLogger.show(
+							'error',
+							'--hidden only applies to files with a CTHV hidden-volume footer.',
+						)
+						ok = False
+					else:
+						ok = engine.decrypt_file(
+							target, output_file, args.password, args.compress, keyfile_data
+						)
 				if ok:
 					success_count += 1
 					ConsoleLogger.show(
