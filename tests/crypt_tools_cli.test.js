@@ -82,6 +82,84 @@ test('encrypts and decrypts file', () => {
   assert.ok(fs.existsSync(decFile));
   assert.equal(fs.readFileSync(decFile, 'utf8'), 'content');
 });
+
+test('encrypts hidden container and decrypts outer and inner', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-hv-'));
+  const decoy = path.join(tmp, 'decoy.txt');
+  const secret = path.join(tmp, 'secret.bin');
+  fs.writeFileSync(decoy, 'benign', 'utf8');
+  fs.writeFileSync(secret, 'topsecret', 'utf8');
+
+  const enc = runCLI([
+    '-f', decoy,
+    '--hidden-vol',
+    '--hidden-file', secret,
+    '--password-outer', 'outerpw',
+    '--password-hidden', 'hiddenpw',
+  ]);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+  const container = decoy + '.enc';
+  assert.ok(fs.existsSync(container), 'container should exist');
+
+  const outDecoy = path.join(tmp, 'out_decoy.txt');
+  const d1 = runCLI(['-d', '-f', container, '-p', 'outerpw', '-o', outDecoy]);
+  assert.equal(d1.code, 0, d1.stdout + d1.stderr);
+  assert.equal(fs.readFileSync(outDecoy, 'utf8'), 'benign');
+
+  const outSecret = path.join(tmp, 'out_secret.bin');
+  const d2 = runCLI(['-d', '--hidden', '-f', container, '-p', 'hiddenpw', '-o', outSecret]);
+  assert.equal(d2.code, 0, d2.stdout + d2.stderr);
+  assert.equal(fs.readFileSync(outSecret, 'utf8'), 'topsecret');
+});
+
+test('inspect reports hidden container', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-hv-inspect-'));
+  const decoy = path.join(tmp, 'decoy.txt');
+  const secret = path.join(tmp, 'secret.bin');
+  fs.writeFileSync(decoy, 'x', 'utf8');
+  fs.writeFileSync(secret, 'y', 'utf8');
+  const enc = runCLI([
+    '-f', decoy,
+    '--hidden-vol',
+    '--hidden-file', secret,
+    '--password-outer', 'a',
+    '--password-hidden', 'b',
+  ]);
+  assert.equal(enc.code, 0);
+  const container = decoy + '.enc';
+  const ins = runCLI(['--inspect', '-f', container]);
+  assert.equal(ins.code, 0);
+  const out = ins.stdout + ins.stderr;
+  assert.match(out, /hidden/i);
+  assert.match(out, /Outer blob size/i);
+});
+
+test('--hidden on standard encrypt file fails', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-h-std-'));
+  const infile = path.join(tmp, 'a.txt');
+  fs.writeFileSync(infile, 'content', 'utf8');
+  const enc = runCLI(['-f', infile, '-p', 'pw']);
+  assert.equal(enc.code, 0);
+  const encFile = infile + '.enc';
+  const dec = runCLI(['-d', '--hidden', '-f', encFile, '-p', 'pw']);
+  assert.equal(dec.code, 1);
+  assert.match(dec.stdout + dec.stderr, /CTHV|hidden-volume/i);
+});
+
+test('hidden-vol rejects wildcards', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-hv-wc-'));
+  fs.writeFileSync(path.join(tmp, 'a.txt'), 'a', 'utf8');
+  const res = runCLI([
+    '-f', path.join(tmp, '*.txt'),
+    '--hidden-vol',
+    '--hidden-file', path.join(tmp, 'a.txt'),
+    '--password-outer', 'o',
+    '--password-hidden', 'h',
+  ], { cwd: tmp });
+  assert.equal(res.code, 1);
+  assert.match(res.stdout + res.stderr, /single decoy/i);
+});
+
 test('file not found exits with error', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));
   const infile = path.join(tmp, 'missing.txt');

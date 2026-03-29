@@ -7,6 +7,7 @@
 
 const crypto = require('crypto');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 const readline = require('readline');
 const zlib = require('zlib');
@@ -30,7 +31,7 @@ try {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.3.0';
+    static VERSION = '2.4.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -41,6 +42,10 @@ class Config {
     static KDF_PBKDF2 = 0x01;
     static KDF_ARGON2 = 0x02;
     static FIXED_HEADER_SIZE = 16;
+
+    /** Hidden-volume container: [CT02_outer][CT02_hidden][FOOTER_MAGIC][uint64_be outer_total_len] */
+    static CONTAINER_FOOTER_MAGIC = Buffer.from('CTHV');
+    static CONTAINER_FOOTER_SIZE = 12;
 
     // Argon2id defaults (recommended for password hashing)
     static ARGON2_MEMORY_COST = 65536;  // 64 MB
@@ -373,6 +378,59 @@ function parseFormatFromBuffer(buffer, { textPayload = false } = {}) {
     return parseLegacyHeader({ textPayload });
 }
 
+/**
+ * Parse hidden-volume footer from end of file.
+ * @returns {null | { outerTotalLen: number, hiddenStart: number, hiddenLen: number, fileSize: number }}
+ */
+function parseHiddenContainerFooterFromPath(inputPath) {
+    let fileSize;
+    try {
+        fileSize = fs.statSync(inputPath).size;
+    } catch {
+        return null;
+    }
+
+    const minBlob = Config.FIXED_HEADER_SIZE + Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE;
+    if (fileSize < minBlob * 2 + Config.CONTAINER_FOOTER_SIZE) {
+        return null;
+    }
+
+    const fd = fs.openSync(inputPath, 'r');
+    const footer = Buffer.alloc(Config.CONTAINER_FOOTER_SIZE);
+    fs.readSync(fd, footer, 0, footer.length, fileSize - Config.CONTAINER_FOOTER_SIZE);
+    fs.closeSync(fd);
+
+    if (!footer.subarray(0, 4).equals(Config.CONTAINER_FOOTER_MAGIC)) {
+        return null;
+    }
+
+    const outerTotalLen = footer.readBigUInt64BE(4);
+    if (outerTotalLen <= 0n || outerTotalLen >= BigInt(fileSize - Config.CONTAINER_FOOTER_SIZE)) {
+        return null;
+    }
+    const outerNum = Number(outerTotalLen);
+    const hiddenStart = outerNum;
+    const hiddenLen = fileSize - Config.CONTAINER_FOOTER_SIZE - outerNum;
+    if (hiddenLen < minBlob) {
+        return null;
+    }
+
+    const magicCheck = Buffer.alloc(4);
+    const fd2 = fs.openSync(inputPath, 'r');
+    fs.readSync(fd2, magicCheck, 0, 4, hiddenStart);
+    fs.closeSync(fd2);
+    if (!magicCheck.equals(Config.MAGIC)) {
+        return null;
+    }
+
+    return {
+        outerTotalLen: outerNum,
+        hiddenStart,
+        hiddenLen,
+        fileSize
+    };
+}
+
 // =========================
 // Key File Functions
 // =========================
@@ -604,11 +662,15 @@ class CryptoEngine {
         }
     }
 
-    async decryptFile(inputPath, outputPath, password, compress = false, keyfileData = null) {
+    async decryptFile(inputPath, outputPath, password, compress = false, keyfileData = null, sliceStart = 0, sliceEnd = null) {
         try {
-            const stats = fs.statSync(inputPath);
-            const fileSize = stats.size;
-            ConsoleLogger.show('debug', `Starting file decryption: ${inputPath} (size: ${this._formatSize(fileSize)}) -> ${outputPath}`);
+            const fileSizeOnDisk = fs.statSync(inputPath).size;
+            const end = sliceEnd == null ? fileSizeOnDisk : sliceEnd;
+            if (sliceStart < 0 || end > fileSizeOnDisk || sliceStart >= end) {
+                throw new Error('Invalid decrypt byte range');
+            }
+            const fileSize = end - sliceStart;
+            ConsoleLogger.show('debug', `Starting file decryption: ${inputPath} (blob size: ${this._formatSize(fileSize)}) -> ${outputPath}`);
             const minimumOverhead = Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE;
 
             if (fileSize < minimumOverhead) {
@@ -618,11 +680,15 @@ class CryptoEngine {
 
             const fd = fs.openSync(inputPath, 'r');
             let prefix = Buffer.alloc(Math.min(Config.FIXED_HEADER_SIZE, fileSize));
-            fs.readSync(fd, prefix, 0, prefix.length, 0);
+            fs.readSync(fd, prefix, 0, prefix.length, sliceStart);
             let metadata = parseFormatFromBuffer(prefix, { textPayload: false });
+            if (metadata.isLegacy && sliceStart !== 0) {
+                fs.closeSync(fd);
+                throw new Error('Legacy format does not support container slices');
+            }
             if (!metadata.isLegacy && prefix.length < metadata.headerLen) {
                 prefix = Buffer.alloc(metadata.headerLen);
-                fs.readSync(fd, prefix, 0, metadata.headerLen, 0);
+                fs.readSync(fd, prefix, 0, metadata.headerLen, sliceStart);
                 metadata = parseCT02HeaderFromBuffer(prefix);
             }
 
@@ -633,9 +699,10 @@ class CryptoEngine {
             const salt = Buffer.alloc(metadata.saltLen);
             const nonce = Buffer.alloc(metadata.nonceLen);
             const tag = Buffer.alloc(metadata.tagLen);
-            fs.readSync(fd, salt, 0, metadata.saltLen, metadata.headerLen);
-            fs.readSync(fd, nonce, 0, metadata.nonceLen, metadata.headerLen + metadata.saltLen);
-            fs.readSync(fd, tag, 0, metadata.tagLen, fileSize - metadata.tagLen);
+            const hdrOff = sliceStart + metadata.headerLen;
+            fs.readSync(fd, salt, 0, metadata.saltLen, hdrOff);
+            fs.readSync(fd, nonce, 0, metadata.nonceLen, hdrOff + metadata.saltLen);
+            fs.readSync(fd, tag, 0, metadata.tagLen, sliceStart + fileSize - metadata.tagLen);
             fs.closeSync(fd);
 
             const ciphertextLen = fileSize - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen;
@@ -661,9 +728,11 @@ class CryptoEngine {
             const progress = createTqdmBar(label, ciphertextLen);
             progress.render();
 
+            const cipherStart = sliceStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen;
+            const cipherEnd = sliceStart + fileSize - metadata.tagLen - 1;
             const readStream = fs.createReadStream(inputPath, {
-                start: metadata.headerLen + metadata.saltLen + metadata.nonceLen,
-                end: fileSize - metadata.tagLen - 1,
+                start: cipherStart,
+                end: cipherEnd,
                 highWaterMark: Config.CHUNK_SIZE
             });
             readStream.on('data', (chunk) => progress.tick(chunk.length));
@@ -704,6 +773,68 @@ class CryptoEngine {
         }
     }
 
+    async encryptHiddenContainer(decoyPath, hiddenPath, outputPath, passwordOuter, passwordHidden, compress = false, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
+        const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-hv-'));
+        const tmpOuter = path.join(tmpDir, 'outer.enc');
+        const tmpHidden = path.join(tmpDir, 'hidden.enc');
+        try {
+            const okO = await this.encryptFile(decoyPath, tmpOuter, passwordOuter, compress, keyfileData, kdfType, iterations);
+            if (!okO) return false;
+            const okH = await this.encryptFile(hiddenPath, tmpHidden, passwordHidden, compress, keyfileData, kdfType, iterations);
+            if (!okH) return false;
+
+            const outerLen = fs.statSync(tmpOuter).size;
+            await pipeline(fs.createReadStream(tmpOuter, { highWaterMark: Config.CHUNK_SIZE }), fs.createWriteStream(outputPath));
+            await pipeline(fs.createReadStream(tmpHidden, { highWaterMark: Config.CHUNK_SIZE }), fs.createWriteStream(outputPath, { flags: 'a' }));
+            const foot = Buffer.alloc(Config.CONTAINER_FOOTER_SIZE);
+            Config.CONTAINER_FOOTER_MAGIC.copy(foot, 0);
+            foot.writeBigUInt64BE(BigInt(outerLen), 4);
+            await fs.promises.appendFile(outputPath, foot);
+
+            const total = outerLen + fs.statSync(tmpHidden).size + Config.CONTAINER_FOOTER_SIZE;
+            ConsoleLogger.show('success', `Hidden container written (${this._formatSize(total)})`);
+            return true;
+        } catch (err) {
+            ConsoleLogger.show('error', `Hidden container encryption error: ${err.message}`);
+            if (fs.existsSync(outputPath)) {
+                try { fs.unlinkSync(outputPath); } catch (e) { }
+            }
+            return false;
+        } finally {
+            try {
+                fs.rmSync(tmpDir, { recursive: true, force: true });
+            } catch (e) { }
+        }
+    }
+
+    async decryptHiddenContainer(inputPath, outputPath, password, { hidden = false, compress = false, keyfileData = null } = {}) {
+        const info = parseHiddenContainerFooterFromPath(inputPath);
+        if (!info) {
+            ConsoleLogger.show('error', 'Not a hidden-volume container (missing or invalid CTHV footer).');
+            return false;
+        }
+        if (hidden) {
+            return this.decryptFile(
+                inputPath,
+                outputPath,
+                password,
+                compress,
+                keyfileData,
+                info.hiddenStart,
+                info.fileSize - Config.CONTAINER_FOOTER_SIZE
+            );
+        }
+        return this.decryptFile(
+            inputPath,
+            outputPath,
+            password,
+            compress,
+            keyfileData,
+            0,
+            info.outerTotalLen
+        );
+    }
+
     inspectFile(inputPath) {
         if (!fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
             const err = new Error(`ENOENT: no such file or directory, stat '${inputPath}'`);
@@ -712,7 +843,10 @@ class CryptoEngine {
         }
 
         const fileSize = fs.statSync(inputPath).size;
-        let prefix = fs.readFileSync(inputPath).subarray(0, Math.min(fileSize, Config.FIXED_HEADER_SIZE));
+        const footerInfo = parseHiddenContainerFooterFromPath(inputPath);
+        const outerSpan = footerInfo ? footerInfo.outerTotalLen : fileSize;
+
+        let prefix = fs.readFileSync(inputPath).subarray(0, Math.min(outerSpan, Config.FIXED_HEADER_SIZE));
 
         if (prefix.length < Config.FIXED_HEADER_SIZE) {
             throw new Error('File is too small to inspect');
@@ -728,12 +862,12 @@ class CryptoEngine {
             metadata = parseCT02HeaderFromBuffer(prefix);
         }
 
-        const ciphertextSize = fileSize - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen;
-        if (ciphertextSize < 0) {
+        const ciphertextSizeOuter = outerSpan - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen;
+        if (ciphertextSizeOuter < 0) {
             throw new Error('Invalid encrypted file structure');
         }
 
-        return {
+        const result = {
             format: metadata.format,
             version: metadata.version,
             legacy: metadata.isLegacy,
@@ -746,8 +880,17 @@ class CryptoEngine {
             tagLength: metadata.tagLen,
             headerLength: metadata.headerLen,
             fileSize,
-            ciphertextSize
+            ciphertextSize: ciphertextSizeOuter,
+            container: footerInfo ? 'hidden' : 'standard'
         };
+
+        if (footerInfo) {
+            result.outerBlobSize = footerInfo.outerTotalLen;
+            result.hiddenBlobSize = footerInfo.hiddenLen;
+            result.footerNote = 'CTHV/Ciphertext. This file embeds a second encrypted blob; deniability vs forensic analysis is limited versus full-disk hidden volumes.';
+        }
+
+        return result;
     }
 }
 
@@ -1058,6 +1201,11 @@ async function main() {
         .option('-p, --password <password>', 'Password (optional; prompt includes strength indicator)')
         .option('--keyfile <path>', 'Key file path for encryption/decryption (use with or without password)')
         .option('-c, --compress', 'Enable compression', false)
+        .option('--hidden-vol', 'Encrypt decoy (-f) and hidden (--hidden-file) into one container (single file only)', false)
+        .option('--hidden-file <path>', 'Hidden payload path (requires --hidden-vol on encrypt)')
+        .option('--hidden', 'With -d -f, decrypt inner/hidden volume (password is the hidden password)', false)
+        .option('--password-outer <password>', 'Decoy password for --hidden-vol (optional; exposing via CLI is insecure)')
+        .option('--password-hidden <password>', 'Hidden password for --hidden-vol; with -d --hidden can be used instead of -p')
         .option('-r, --recursive', 'Recursively process directories or wildcard patterns (uses ** for subfolders)', false)
         .option('--kdf <type>', 'Key derivation function: pbkdf2 (default) or argon2 (more secure)', 'pbkdf2')
         .option('--iterations <count>', 'Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)', parseInt)
@@ -1069,7 +1217,10 @@ async function main() {
             '    (equivalent to .\\temp\\**\\*.txt).\n' +
             '  - Password prompts show a live strength indicator.\n' +
             '  - Key file support: Use --keyfile to encrypt/decrypt with a key file.\n' +
-            '    Combining password + keyfile provides two-factor encryption.'
+            '    Combining password + keyfile provides two-factor encryption.\n' +
+            '  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.\n' +
+            '    This is not identical to VeraCrypt: the footer and extra length are visible forensically;\n' +
+            '    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”'
         );
 
     // Show banner for help/version
@@ -1101,6 +1252,34 @@ async function main() {
         }
         if (options.inspect && options.text) {
             ConsoleLogger.show('error', '--inspect only supports --file input');
+            process.exit(1);
+        }
+        if (options.hiddenVol && options.text) {
+            ConsoleLogger.show('error', '--hidden-vol applies only to file encryption');
+            process.exit(1);
+        }
+        if (options.hiddenVol && options.decrypt) {
+            ConsoleLogger.show('error', '--hidden-vol is for encryption only');
+            process.exit(1);
+        }
+        if (options.hiddenVol && options.inspect) {
+            ConsoleLogger.show('error', '--hidden-vol cannot be used with --inspect');
+            process.exit(1);
+        }
+        if (options.hiddenFile && !options.hiddenVol) {
+            ConsoleLogger.show('error', '--hidden-file requires --hidden-vol');
+            process.exit(1);
+        }
+        if (options.hiddenVol && !options.hiddenFile) {
+            ConsoleLogger.show('error', '--hidden-vol requires --hidden-file');
+            process.exit(1);
+        }
+        if (options.hidden && !options.decrypt) {
+            ConsoleLogger.show('error', '--hidden requires decrypt mode (-d)');
+            process.exit(1);
+        }
+        if (options.hidden && options.text) {
+            ConsoleLogger.show('error', '--hidden applies only to file decryption');
             process.exit(1);
         }
     }
@@ -1141,6 +1320,35 @@ async function main() {
         fileList = expanded;
     }
 
+    if (options.hiddenVol) {
+        if (!options.file) {
+            ConsoleLogger.show('error', '--hidden-vol requires -f/--file (decoy path)');
+            process.exit(1);
+        }
+        if (options.recursive) {
+            ConsoleLogger.show('error', '--hidden-vol cannot be used with --recursive');
+            process.exit(1);
+        }
+        const wc = hasWildcard(options.file);
+        if (wc || (fileList && fileList.length !== 1)) {
+            ConsoleLogger.show('error', '--hidden-vol requires a single decoy file (no wildcards or multi-file batch)');
+            process.exit(1);
+        }
+        const decoyP = fileList[0];
+        if (!fs.existsSync(decoyP)) {
+            ConsoleLogger.show('error', `Decoy file not found: ${decoyP}`);
+            process.exit(1);
+        }
+        if (!fs.statSync(decoyP).isFile()) {
+            ConsoleLogger.show('error', 'Decoy path must be a regular file for --hidden-vol');
+            process.exit(1);
+        }
+        if (!fs.existsSync(options.hiddenFile) || !fs.statSync(options.hiddenFile).isFile()) {
+            ConsoleLogger.show('error', `Hidden file not found or not a file: ${options.hiddenFile}`);
+            process.exit(1);
+        }
+    }
+
     if (options.inspect && options.file) {
         const target = (fileList && fileList.length > 0) ? fileList[0] : options.file;
         let details;
@@ -1170,6 +1378,14 @@ async function main() {
         ConsoleLogger.show('info', `Header length: ${details.headerLength}`, '🧱');
         ConsoleLogger.show('info', `File size: ${details.fileSize} bytes`, '📦');
         ConsoleLogger.show('info', `Ciphertext size: ${details.ciphertextSize} bytes`, '🔐');
+        if (details.container === 'hidden') {
+            ConsoleLogger.show('info', 'Container: hidden (outer CT02 + inner CT02 + CTHV footer)', '🫥');
+            ConsoleLogger.show('info', `Outer blob size: ${details.outerBlobSize} bytes`, '📦');
+            ConsoleLogger.show('info', `Hidden blob size: ${details.hiddenBlobSize} bytes`, '📦');
+            if (details.footerNote) {
+                ConsoleLogger.show('warning', details.footerNote);
+            }
+        }
         const endTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
         ConsoleLogger.show('info', `Session ended at ${endTimestamp}`, '🏁');
         if (ConsoleLogger.LOG_ENABLED) {
@@ -1263,11 +1479,34 @@ async function main() {
     }
     ConsoleLogger.show('important', `KDF: ${options.kdf} (${iterations} iterations)`, '🧬');
 
+    let pwOuter = options.passwordOuter;
+    let pwHidden = options.passwordHidden;
+
     // Secure Password Input with Strength Indicator
-    // Only prompt for password if not provided (undefined), not if empty string was explicitly passed
-    if (!options.inspect && options.password === undefined) {
-        // Only verify password when encrypting (not needed for decrypting)
-        if (!options.decrypt) {
+    if (!options.inspect && options.hiddenVol) {
+        if (pwOuter === undefined) {
+            pwOuter = await getpassVerifyWithStrength(
+                'Enter decoy (outer) password: ',
+                'Verify decoy (outer) password: '
+            );
+            ConsoleLogger.show('info', 'Decoy password entered', '🔑');
+        } else {
+            ConsoleLogger.show('debug', 'Decoy password provided via command line');
+        }
+        if (pwHidden === undefined) {
+            pwHidden = await getpassVerifyWithStrength(
+                'Enter hidden volume password: ',
+                'Verify hidden volume password: '
+            );
+            ConsoleLogger.show('info', 'Hidden volume password entered', '🔑');
+        } else {
+            ConsoleLogger.show('debug', 'Hidden password provided via command line');
+        }
+    } else if (!options.inspect && options.password === undefined) {
+        if (options.decrypt && options.hidden && options.passwordHidden !== undefined) {
+            options.password = options.passwordHidden;
+            ConsoleLogger.show('debug', 'Using --password-hidden for inner decrypt');
+        } else if (!options.decrypt) {
             options.password = await getpassVerifyWithStrength();
             ConsoleLogger.show('info', 'Password verification entered', '🔄');
         } else {
@@ -1350,7 +1589,20 @@ async function main() {
                     }
 
                     ConsoleLogger.show('info', `Processing: ${filePath}`, '📄');
-                    const result = await engine.decryptFile(filePath, outPath, options.password, options.compress, keyfileData);
+                    const foot = parseHiddenContainerFooterFromPath(filePath);
+                    let result;
+                    if (foot) {
+                        result = await engine.decryptHiddenContainer(filePath, outPath, options.password, {
+                            hidden: options.hidden,
+                            compress: options.compress,
+                            keyfileData
+                        });
+                    } else if (options.hidden) {
+                        ConsoleLogger.show('error', `--hidden only applies to CTHV containers: ${filePath}`, '❌');
+                        result = false;
+                    } else {
+                        result = await engine.decryptFile(filePath, outPath, options.password, options.compress, keyfileData);
+                    }
                     if (result) {
                         successCount++;
                         const size = fs.statSync(outPath).size;
@@ -1402,9 +1654,38 @@ async function main() {
                         ? path.join(path.dirname(target), path.basename(target, '.enc') + '.dec')
                         : target + '.enc');
 
-                const ok = !options.decrypt
-                    ? await engine.encryptFile(target, outputFile, options.password, options.compress, keyfileData, kdfType, iterations)
-                    : await engine.decryptFile(target, outputFile, options.password, options.compress, keyfileData);
+                let ok;
+                if (!options.decrypt) {
+                    if (options.hiddenVol) {
+                        ok = await engine.encryptHiddenContainer(
+                            target,
+                            options.hiddenFile,
+                            outputFile,
+                            pwOuter,
+                            pwHidden,
+                            options.compress,
+                            keyfileData,
+                            kdfType,
+                            iterations
+                        );
+                    } else {
+                        ok = await engine.encryptFile(target, outputFile, options.password, options.compress, keyfileData, kdfType, iterations);
+                    }
+                } else {
+                    const foot = parseHiddenContainerFooterFromPath(target);
+                    if (foot) {
+                        ok = await engine.decryptHiddenContainer(target, outputFile, options.password, {
+                            hidden: options.hidden,
+                            compress: options.compress,
+                            keyfileData
+                        });
+                    } else if (options.hidden) {
+                        ConsoleLogger.show('error', '--hidden only applies to files with a CTHV hidden-volume footer.');
+                        ok = false;
+                    } else {
+                        ok = await engine.decryptFile(target, outputFile, options.password, options.compress, keyfileData);
+                    }
+                }
 
                 if (ok) {
                     successCount++;
