@@ -138,7 +138,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.4.0';
+    static VERSION = '2.4.1';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -622,6 +622,77 @@ function inspectThresholdRequirementsFromPath(inputPath) {
     }
 }
 
+function inspectCT02BlobFromPath(inputPath, { blobStart = 0, blobSpan = null } = {}) {
+    const fileSize = fs.statSync(inputPath).size;
+    const span = blobSpan == null ? fileSize - blobStart : blobSpan;
+    if (span <= 0) {
+        throw new Error('Invalid encrypted file structure');
+    }
+
+    const fd = fs.openSync(inputPath, 'r');
+    try {
+        let prefix = Buffer.alloc(Math.min(Config.FIXED_HEADER_SIZE, span));
+        const bytesRead = fs.readSync(fd, prefix, 0, prefix.length, blobStart);
+        prefix = prefix.subarray(0, bytesRead);
+
+        if (prefix.length < Config.FIXED_HEADER_SIZE) {
+            throw new Error('File is too small to inspect');
+        }
+        if (!prefix.subarray(0, 4).equals(Config.MAGIC)) {
+            throw new Error('Unrecognized file format. Only CT02 encrypted files can be inspected reliably.');
+        }
+
+        let metadata = parseFormatFromBuffer(prefix, { textPayload: false });
+        if (!metadata.isLegacy && prefix.length < metadata.headerLen) {
+            prefix = Buffer.alloc(metadata.headerLen);
+            fs.readSync(fd, prefix, 0, metadata.headerLen, blobStart);
+            metadata = parseCT02HeaderFromBuffer(prefix);
+        }
+
+        const result = {
+            format: metadata.format,
+            version: metadata.version,
+            legacy: metadata.isLegacy,
+            compression: metadata.compress ? 'enabled' : 'disabled',
+            keyfile: metadata.useKeyfile ? 'enabled' : 'disabled',
+            kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : (metadata.kdfId === Config.KDF_ARGON2 ? 'Argon2id' : `unknown(${metadata.kdfId})`),
+            iterations: metadata.iterations,
+            saltLength: metadata.saltLen,
+            nonceLength: metadata.nonceLen,
+            tagLength: metadata.tagLen,
+            headerLength: metadata.headerLen,
+            blobSize: span,
+            thresholdMode: (metadata.flags & Config.FLAG_THRESHOLD) ? 'enabled' : 'disabled'
+        };
+
+        let metadataBytes = metadata.headerLen + metadata.saltLen + metadata.nonceLen + metadata.tagLen;
+        if (metadata.flags & Config.FLAG_THRESHOLD) {
+            const numSharesAndThreshold = Buffer.alloc(2);
+            const shareBytesRead = fs.readSync(fd, numSharesAndThreshold, 0, 2, blobStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen);
+            if (shareBytesRead !== 2) {
+                throw new Error('Threshold metadata is incomplete');
+            }
+            const numPasswords = numSharesAndThreshold[0];
+            const thresholdRequired = numSharesAndThreshold[1];
+            const shareSize = Config.SALT_SIZE + Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE;
+            const shareMetadataSize = 2 + (numPasswords * shareSize);
+            metadataBytes += shareMetadataSize;
+            result.numPasswords = numPasswords;
+            result.thresholdRequired = thresholdRequired;
+            result.shareMetadataSize = shareMetadataSize;
+        }
+
+        const ciphertextSize = span - metadataBytes;
+        if (ciphertextSize < 0) {
+            throw new Error('Invalid encrypted file structure');
+        }
+        result.ciphertextSize = ciphertextSize;
+        return result;
+    } finally {
+        fs.closeSync(fd);
+    }
+}
+
 // =========================
 // Key File Functions
 // =========================
@@ -1036,48 +1107,17 @@ class CryptoEngine {
         const fileSize = fs.statSync(inputPath).size;
         const footerInfo = parseHiddenContainerFooterFromPath(inputPath);
         const outerSpan = footerInfo ? footerInfo.outerTotalLen : fileSize;
-
-        let prefix = fs.readFileSync(inputPath).subarray(0, Math.min(outerSpan, Config.FIXED_HEADER_SIZE));
-
-        if (prefix.length < Config.FIXED_HEADER_SIZE) {
-            throw new Error('File is too small to inspect');
-        }
-
-        if (!prefix.subarray(0, 4).equals(Config.MAGIC)) {
-            throw new Error('Unrecognized file format. Only CT02 encrypted files can be inspected reliably.');
-        }
-
-        let metadata = parseFormatFromBuffer(prefix, { textPayload: false });
-        if (prefix.length < metadata.headerLen) {
-            prefix = fs.readFileSync(inputPath).subarray(0, metadata.headerLen);
-            metadata = parseCT02HeaderFromBuffer(prefix);
-        }
-
-        const ciphertextSizeOuter = outerSpan - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen;
-        if (ciphertextSizeOuter < 0) {
-            throw new Error('Invalid encrypted file structure');
-        }
-
-        const result = {
-            format: metadata.format,
-            version: metadata.version,
-            legacy: metadata.isLegacy,
-            compression: metadata.compress ? 'enabled' : 'disabled',
-            keyfile: metadata.useKeyfile ? 'enabled' : 'disabled',
-            kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : (metadata.kdfId === Config.KDF_ARGON2 ? 'Argon2id' : `unknown(${metadata.kdfId})`),
-            iterations: metadata.iterations,
-            saltLength: metadata.saltLen,
-            nonceLength: metadata.nonceLen,
-            tagLength: metadata.tagLen,
-            headerLength: metadata.headerLen,
-            fileSize,
-            ciphertextSize: ciphertextSizeOuter,
-            container: footerInfo ? 'hidden' : 'standard'
-        };
+        const result = inspectCT02BlobFromPath(inputPath, { blobStart: 0, blobSpan: outerSpan });
+        result.fileSize = fileSize;
+        result.container = footerInfo ? 'hidden' : 'standard';
 
         if (footerInfo) {
             result.outerBlobSize = footerInfo.outerTotalLen;
             result.hiddenBlobSize = footerInfo.hiddenLen;
+            result.hiddenMetadata = inspectCT02BlobFromPath(inputPath, {
+                blobStart: footerInfo.hiddenStart,
+                blobSpan: footerInfo.hiddenLen
+            });
             result.footerNote = 'CTHV/Ciphertext. This file embeds a second encrypted blob; deniability vs forensic analysis is limited versus full-disk hidden volumes.';
         }
 
@@ -1260,8 +1300,7 @@ class CryptoEngine {
             const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
             
             if (effectiveCompress) {
-                const decompressor = zlib.createInflate();
-                const decompressed = decompressor.decrypt(decrypted);
+                const decompressed = zlib.inflateSync(decrypted);
                 fs.writeFileSync(outputPath, decompressed);
             } else {
                 fs.writeFileSync(outputPath, decrypted);
@@ -1836,6 +1875,11 @@ async function main() {
         ConsoleLogger.show('info', `Keyfile: ${details.keyfile || 'disabled'}`, '🔑');
         ConsoleLogger.show('info', `KDF: ${details.kdf}`, '🧬');
         ConsoleLogger.show('info', `Iterations: ${details.iterations}`, '🔁');
+        ConsoleLogger.show('info', `Threshold mode: ${details.thresholdMode}`, '🧩');
+        if (details.numPasswords !== undefined) {
+            ConsoleLogger.show('info', `Shares: ${details.numPasswords}`, '🔢');
+            ConsoleLogger.show('info', `Threshold required: ${details.thresholdRequired}`, '🎯');
+        }
         ConsoleLogger.show('info', `Salt length: ${details.saltLength}`, '🧂');
         ConsoleLogger.show('info', `Nonce length: ${details.nonceLength}`, '🎲');
         ConsoleLogger.show('info', `Tag length: ${details.tagLength}`, '🏷️');
@@ -1846,6 +1890,18 @@ async function main() {
             ConsoleLogger.show('info', 'Container: hidden (outer CT02 + inner CT02 + CTHV footer)', '🫥');
             ConsoleLogger.show('info', `Outer blob size: ${details.outerBlobSize} bytes`, '📦');
             ConsoleLogger.show('info', `Hidden blob size: ${details.hiddenBlobSize} bytes`, '📦');
+            if (details.hiddenMetadata) {
+                ConsoleLogger.show('info', 'Hidden blob metadata:', '🫥');
+                ConsoleLogger.show('info', `Inner compression: ${details.hiddenMetadata.compression}`, '🗜️');
+                ConsoleLogger.show('info', `Inner keyfile: ${details.hiddenMetadata.keyfile}`, '🔑');
+                ConsoleLogger.show('info', `Inner KDF: ${details.hiddenMetadata.kdf}`, '🧬');
+                ConsoleLogger.show('info', `Inner iterations: ${details.hiddenMetadata.iterations}`, '🔁');
+                ConsoleLogger.show('info', `Inner threshold mode: ${details.hiddenMetadata.thresholdMode}`, '🧩');
+                if (details.hiddenMetadata.numPasswords !== undefined) {
+                    ConsoleLogger.show('info', `Inner shares: ${details.hiddenMetadata.numPasswords}`, '🔢');
+                    ConsoleLogger.show('info', `Inner threshold required: ${details.hiddenMetadata.thresholdRequired}`, '🎯');
+                }
+            }
             if (details.footerNote) {
                 ConsoleLogger.show('warning', details.footerNote);
             }
@@ -1884,8 +1940,17 @@ async function main() {
 
         const modeStr = options.decrypt ? 'decrypt' : 'encrypt';
         const compressionStr = options.compress ? 'enabled' : 'disabled';
+        let displayCompression = compressionStr;
+        if (options.decrypt && !isDir && !hasWildcard(options.file) && fs.existsSync(options.file) && fs.statSync(options.file).isFile()) {
+            try {
+                const details = engine.inspectFile(options.file);
+                displayCompression = details.compression;
+            } catch (err) {
+                ConsoleLogger.show('debug', `Could not inspect compression metadata: ${err.message}`);
+            }
+        }
         ConsoleLogger.show('info', `Mode: ${modeStr}`, options.decrypt ? '🔓' : '🔐');
-        ConsoleLogger.show('info', `Compression: ${compressionStr}`, '📦');
+        ConsoleLogger.show('info', `Compression: ${displayCompression}`, '📦');
 
         if (isDir && options.recursive) {
             ConsoleLogger.show('info', `Processing directory: ${options.file}`, '📁');

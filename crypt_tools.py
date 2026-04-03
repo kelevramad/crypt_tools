@@ -148,7 +148,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.4.0'
+	VERSION = '2.4.1'
 
 	# File format
 	MAGIC = b'CT02'
@@ -518,6 +518,81 @@ def inspect_threshold_requirements_from_path(path: str) -> Optional[dict]:
 		raise ValueError('Threshold metadata is incomplete')
 
 	return {'num_passwords': num_and_thresh[0], 'threshold': num_and_thresh[1]}
+
+
+def _inspect_ct02_blob_from_path(input_path: str, *, blob_start: int = 0, blob_span: Optional[int] = None) -> dict:
+	"""Inspect a single CT02 blob at a given offset."""
+	file_size = os.path.getsize(input_path)
+	span = file_size - blob_start if blob_span is None else blob_span
+	if span <= 0:
+		raise ValueError('Invalid encrypted file structure')
+
+	with open(input_path, 'rb') as fin:
+		fin.seek(blob_start)
+		prefix = fin.read(min(span, Config.FIXED_HEADER_SIZE))
+
+	if len(prefix) < Config.FIXED_HEADER_SIZE:
+		raise ValueError('File is too small to inspect')
+	if prefix[:4] != Config.MAGIC:
+		raise ValueError('Unrecognized file format. Only CT02 encrypted files can be inspected reliably.')
+
+	metadata = _parse_format_from_bytes(prefix, text_payload=False)
+	if not metadata['is_legacy'] and len(prefix) < metadata['header_len']:
+		with open(input_path, 'rb') as fin:
+			fin.seek(blob_start)
+			prefix = fin.read(metadata['header_len'])
+		metadata = _parse_ct02_header_from_bytes(prefix)
+
+	header_len = metadata['header_len']
+	salt_len = metadata['salt_len']
+	nonce_len = metadata['nonce_len']
+	tag_len = metadata['tag_len']
+
+	result = {
+		'format': metadata['format'],
+		'version': metadata['version'],
+		'legacy': metadata['is_legacy'],
+		'compression': 'enabled' if metadata['compress'] else 'disabled',
+		'keyfile': 'enabled' if metadata.get('use_keyfile', False) else 'disabled',
+		'kdf': 'PBKDF2-SHA256'
+		if metadata['kdf_id'] == Config.KDF_PBKDF2
+		else (
+			'Argon2id'
+			if metadata['kdf_id'] == Config.KDF_ARGON2
+			else f'unknown({metadata["kdf_id"]})'
+		),
+		'iterations': metadata['iterations'],
+		'saltLength': salt_len,
+		'nonceLength': nonce_len,
+		'tagLength': tag_len,
+		'headerLength': header_len,
+		'blobSize': span,
+		'thresholdMode': 'enabled' if metadata['flags'] & Config.FLAG_THRESHOLD else 'disabled',
+	}
+
+	metadata_bytes = header_len + salt_len + nonce_len + tag_len
+	if metadata['flags'] & Config.FLAG_THRESHOLD:
+		with open(input_path, 'rb') as fin:
+			fin.seek(blob_start + header_len + salt_len + nonce_len)
+			num_and_thresh = fin.read(2)
+		if len(num_and_thresh) != 2:
+			raise ValueError('Threshold metadata is incomplete')
+
+		num_passwords = num_and_thresh[0]
+		threshold_required = num_and_thresh[1]
+		share_size = Config.SALT_SIZE + Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE
+		share_metadata_size = 2 + (num_passwords * share_size)
+		metadata_bytes += share_metadata_size
+		result['numPasswords'] = num_passwords
+		result['thresholdRequired'] = threshold_required
+		result['shareMetadataSize'] = share_metadata_size
+
+	ciphertext_size = span - metadata_bytes
+	if ciphertext_size < 0:
+		raise ValueError('Invalid encrypted file structure')
+
+	result['ciphertextSize'] = ciphertext_size
+	return result
 
 
 # =========================
@@ -1116,61 +1191,18 @@ class CryptoEngine:
 		file_size = os.path.getsize(input_path)
 		footer_info = parse_hidden_container_footer_from_path(input_path)
 		outer_span = footer_info['outerTotalLen'] if footer_info else file_size
-
-		prefix = None
-
-		with open(input_path, 'rb') as fin:
-			prefix = fin.read(min(outer_span, Config.FIXED_HEADER_SIZE))
-
-		if prefix is None or len(prefix) < Config.FIXED_HEADER_SIZE:
-			raise ValueError('File is too small to inspect')
-
-		if not prefix[:4] == Config.MAGIC:
-			raise ValueError(
-				'Unrecognized file format. Only CT02 encrypted files can be inspected reliably.'
-			)
-
-		metadata = _parse_format_from_bytes(prefix, text_payload=False)
-		if not metadata['is_legacy'] and len(prefix) < metadata['header_len']:
-			with open(input_path, 'rb') as fin:
-				prefix = fin.read(metadata['header_len'])
-			metadata = _parse_ct02_header_from_bytes(prefix)
-
-		header_len = metadata['header_len']
-		salt_len = metadata['salt_len']
-		nonce_len = metadata['nonce_len']
-		tag_len = metadata['tag_len']
-
-		ciphertext_size_outer = outer_span - header_len - salt_len - nonce_len - tag_len
-		if ciphertext_size_outer < 0:
-			raise ValueError('Invalid encrypted file structure')
-
-		result = {
-			'format': metadata['format'],
-			'version': metadata['version'],
-			'legacy': metadata['is_legacy'],
-			'compression': 'enabled' if metadata['compress'] else 'disabled',
-			'keyfile': 'enabled' if metadata.get('use_keyfile', False) else 'disabled',
-			'kdf': 'PBKDF2-SHA256'
-			if metadata['kdf_id'] == Config.KDF_PBKDF2
-			else (
-				'Argon2id'
-				if metadata['kdf_id'] == Config.KDF_ARGON2
-				else f'unknown({metadata["kdf_id"]})'
-			),
-			'iterations': metadata['iterations'],
-			'saltLength': salt_len,
-			'nonceLength': nonce_len,
-			'tagLength': tag_len,
-			'headerLength': header_len,
-			'fileSize': file_size,
-			'ciphertextSize': ciphertext_size_outer,
-			'container': 'hidden' if footer_info else 'standard',
-		}
+		result = _inspect_ct02_blob_from_path(input_path, blob_start=0, blob_span=outer_span)
+		result['fileSize'] = file_size
+		result['container'] = 'hidden' if footer_info else 'standard'
 
 		if footer_info:
 			result['outerBlobSize'] = footer_info['outerTotalLen']
 			result['hiddenBlobSize'] = footer_info['hiddenLen']
+			result['hiddenMetadata'] = _inspect_ct02_blob_from_path(
+				input_path,
+				blob_start=footer_info['hiddenStart'],
+				blob_span=footer_info['hiddenLen'],
+			)
 			result['footerNote'] = (
 				'CTHV/Ciphertext. This file embeds a second encrypted blob; '
 				'deniability vs forensic analysis is limited versus full-disk hidden volumes.'
@@ -2195,6 +2227,14 @@ def main(argv=None):
 		ConsoleLogger.show('info', f'Keyfile: {details.get("keyfile", "disabled")}', icon='🔑')
 		ConsoleLogger.show('info', f'KDF: {details["kdf"]}', icon='🧬')
 		ConsoleLogger.show('info', f'Iterations: {details["iterations"]}', icon='🔁')
+		ConsoleLogger.show('info', f'Threshold mode: {details["thresholdMode"]}', icon='🧩')
+		if details.get('numPasswords') is not None:
+			ConsoleLogger.show('info', f'Shares: {details["numPasswords"]}', icon='🔢')
+			ConsoleLogger.show(
+				'info',
+				f'Threshold required: {details["thresholdRequired"]}',
+				icon='🎯',
+			)
 		ConsoleLogger.show('info', f'Salt length: {details["saltLength"]}', icon='🧂')
 		ConsoleLogger.show('info', f'Nonce length: {details["nonceLength"]}', icon='🎲')
 		ConsoleLogger.show('info', f'Tag length: {details["tagLength"]}', icon='🏷️')
@@ -2217,6 +2257,25 @@ def main(argv=None):
 				f'Hidden blob size: {details["hiddenBlobSize"]} bytes',
 				icon='📦',
 			)
+			inner = details.get('hiddenMetadata')
+			if inner:
+				ConsoleLogger.show('info', 'Hidden blob metadata:', icon='🫥')
+				ConsoleLogger.show('info', f'Inner compression: {inner["compression"]}', icon='🗜️')
+				ConsoleLogger.show('info', f'Inner keyfile: {inner["keyfile"]}', icon='🔑')
+				ConsoleLogger.show('info', f'Inner KDF: {inner["kdf"]}', icon='🧬')
+				ConsoleLogger.show('info', f'Inner iterations: {inner["iterations"]}', icon='🔁')
+				ConsoleLogger.show(
+					'info',
+					f'Inner threshold mode: {inner["thresholdMode"]}',
+					icon='🧩',
+				)
+				if inner.get('numPasswords') is not None:
+					ConsoleLogger.show('info', f'Inner shares: {inner["numPasswords"]}', icon='🔢')
+					ConsoleLogger.show(
+						'info',
+						f'Inner threshold required: {inner["thresholdRequired"]}',
+						icon='🎯',
+					)
 			if details.get('footerNote'):
 				ConsoleLogger.show('warning', details['footerNote'])
 		end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
@@ -2311,6 +2370,17 @@ def main(argv=None):
 
 		mode_str = 'decrypt' if args.decrypt else 'encrypt'
 		compression_str = 'enabled' if args.compress else 'disabled'
+		if (
+			args.decrypt
+			and not is_dir
+			and not glob.has_magic(args.file)
+			and os.path.isfile(args.file)
+		):
+			try:
+				details = engine.inspect_file(args.file)
+				compression_str = details['compression']
+			except Exception as e:
+				ConsoleLogger.show('debug', f'Could not inspect compression metadata: {e}')
 		ConsoleLogger.show('info', f'Mode: {mode_str}', icon='🔐' if not args.decrypt else '🔓')
 		ConsoleLogger.show('info', f'Compression: {compression_str}', icon='📦')
 

@@ -187,6 +187,8 @@ def test_hidden_container_roundtrip(engine):
 		assert details['container'] == 'hidden'
 		assert details['outerBlobSize'] == info['outerTotalLen']
 		assert details['hiddenBlobSize'] == info['hiddenLen']
+		assert details['hiddenMetadata']['compression'] == 'disabled'
+		assert details['hiddenMetadata']['thresholdMode'] == 'disabled'
 
 		assert engine.decrypt_hidden_container(
 			cont_path, out_decoy, pw_outer, hidden=False, compress=False, keyfile_data=None
@@ -443,6 +445,24 @@ def test_cli_decrypt_threshold_file_prompts_required_password_count(monkeypatch,
 	assert prompted == ['Enter password 1/2: ', 'Enter password 2/2: ']
 	captured = capsys.readouterr()
 	assert 'Threshold-encrypted file detected: 2 password(s) required' in captured.out
+
+
+def test_cli_decrypt_reports_compression_from_file_header(capsys, engine):
+	"""Decrypt banner should report stored compression metadata."""
+	with tempfile.TemporaryDirectory() as tmpdir:
+		input_path = os.path.join(tmpdir, 'compressed.txt')
+		enc_path = input_path + '.enc'
+
+		with open(input_path, 'w', encoding='utf-8') as f:
+			f.write('A' * 5000)
+
+		assert engine.encrypt_file(input_path, enc_path, 'pw', compress=True)
+
+		with pytest.raises(SystemExit):
+			main(['--decrypt', '-f', enc_path, '-p', 'wrong'])
+
+	captured = capsys.readouterr()
+	assert 'Compression: enabled' in captured.out
 
 
 def test_recursive_directory(engine):
@@ -1054,6 +1074,24 @@ def test_inspect_file_reports_ct02_metadata(engine, tmp_path):
 	assert details['legacy'] is False
 	assert details['compression'] == 'enabled'
 	assert details['iterations'] == Config.PBKDF2_ITERATIONS
+	assert details['thresholdMode'] == 'disabled'
+
+
+def test_inspect_file_reports_threshold_metadata(engine, tmp_path):
+	infile = tmp_path / 'threshold.txt'
+	infile.write_text('threshold secret')
+	encfile = tmp_path / 'threshold.txt.enc'
+
+	assert engine.encrypt_with_threshold(
+		str(infile), str(encfile), ['a', 'b', 'c'], 2, compress=True
+	)
+
+	details = engine.inspect_file(str(encfile))
+	assert details['thresholdMode'] == 'enabled'
+	assert details['numPasswords'] == 3
+	assert details['thresholdRequired'] == 2
+	assert details['compression'] == 'enabled'
+	assert details['ciphertextSize'] > 0
 
 
 def test_cli_inspect_file(capsys, tmp_path):
@@ -1069,6 +1107,22 @@ def test_cli_inspect_file(capsys, tmp_path):
 	captured = capsys.readouterr()
 	assert 'Format: CT02' in captured.out
 	assert 'Compression: disabled' in captured.out
+	assert 'Threshold mode: disabled' in captured.out
+
+
+def test_cli_inspect_threshold_file(capsys, tmp_path):
+	engine = CryptoEngine()
+	infile = tmp_path / 'threshold.txt'
+	infile.write_text('threshold secret')
+	encfile = tmp_path / 'threshold.txt.enc'
+
+	assert engine.encrypt_with_threshold(str(infile), str(encfile), ['a', 'b', 'c'], 2, compress=True)
+
+	main(['--inspect', '-f', str(encfile)])
+	captured = capsys.readouterr()
+	assert 'Threshold mode: enabled' in captured.out
+	assert 'Shares: 3' in captured.out
+	assert 'Threshold required: 2' in captured.out
 
 
 def test_inspect_file_rejects_plaintext_file(engine, tmp_path):

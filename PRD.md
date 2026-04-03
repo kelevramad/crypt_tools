@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.4.0 |
+| **Version** | 2.4.1 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -299,6 +299,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.4.1 | 2026-04-03 | Inlined Shamir logic into the CLI scripts, fixed threshold password prompting and compressed threshold decryption, and expanded inspect output for threshold files and hidden containers |
 | 2.4.0 | 2026-03-28 | Hidden-volume containers (`--hidden-vol`, `--hidden-file`, `-d --hidden`, `CTHV` footer), `decrypt_file` byte-range slices, inspect reports container metadata; Python and Node parity |
 | 2.3.0 | 2026-03-27 | Version bump for development |
 | 2.2.0 | 2026-03-27 | Added Argon2id key derivation (`--kdf argon2`, `--iterations`), key file support (`--generate-keyfile`, `--keyfile`), `CT02` format header, inspect mode, and automatic compression detection for new files |

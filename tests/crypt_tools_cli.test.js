@@ -115,6 +115,37 @@ test('threshold decrypt without -p prompts for the required number of passwords'
   assert.equal(fs.readFileSync(decFile, 'utf8'), 'threshold prompt content');
 });
 
+test('threshold decrypt auto-detects compression from the file header', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-threshold-compress-'));
+  const infile = path.join(tmp, 'README.md');
+  fs.writeFileSync(infile, 'A'.repeat(5000), 'utf8');
+
+  const enc = runCLI(['-f', infile, '-p', 'alpha', '-p', 'beta', '-p', 'gamma', '--threshold', '2', '-c']);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+
+  const encFile = infile + '.enc';
+  const dec = runCLI(['-d', '-f', encFile, '-p', 'alpha', '-p', 'beta']);
+  assert.equal(dec.code, 0, dec.stdout + dec.stderr);
+
+  const decFile = path.join(tmp, 'README.md.dec');
+  assert.ok(fs.existsSync(decFile));
+  assert.equal(fs.readFileSync(decFile, 'utf8'), 'A'.repeat(5000));
+});
+
+test('decrypt banner reports compression from the file header', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-banner-compress-'));
+  const infile = path.join(tmp, 'README.md');
+  fs.writeFileSync(infile, 'A'.repeat(5000), 'utf8');
+
+  const enc = runCLI(['-f', infile, '-p', 'pw', '-c']);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+
+  const encFile = infile + '.enc';
+  const dec = runCLI(['-d', '-f', encFile, '-p', 'wrong']);
+  assert.equal(dec.code, 1);
+  assert.match(dec.stdout, /Compression: enabled/);
+});
+
 test('encrypts and decrypts file', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));
   const infile = path.join(tmp, 'a.txt');
@@ -181,6 +212,25 @@ test('inspect reports hidden container', () => {
   const out = ins.stdout + ins.stderr;
   assert.match(out, /hidden/i);
   assert.match(out, /Outer blob size/i);
+  assert.match(out, /Hidden blob metadata/i);
+  assert.match(out, /Inner compression:/i);
+});
+
+test('inspect reports threshold metadata', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-threshold-inspect-'));
+  const infile = path.join(tmp, 'README.md');
+  fs.writeFileSync(infile, 'threshold inspect content', 'utf8');
+
+  const enc = runCLI(['-f', infile, '-p', 'alpha', '-p', 'beta', '-p', 'gamma', '--threshold', '2', '-c']);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+
+  const ins = runCLI(['--inspect', '-f', infile + '.enc']);
+  assert.equal(ins.code, 0, ins.stdout + ins.stderr);
+  const out = ins.stdout + ins.stderr;
+  assert.match(out, /Threshold mode: enabled/);
+  assert.match(out, /Shares: 3/);
+  assert.match(out, /Threshold required: 2/);
+  assert.match(out, /Compression: enabled/);
 });
 
 test('--hidden on standard encrypt file fails', () => {
@@ -677,9 +727,6 @@ test('inspect shows argon2 kdf', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
-
-
-
 
 
 
