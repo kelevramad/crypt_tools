@@ -2015,7 +2015,9 @@ def parse_args(argv=None):
 	return parser.parse_args(argv)
 
 
-def _log_completion_summary(is_decrypt: bool, success_count: int, total_ops: int, elapsed_time: float):
+def _log_completion_summary(
+	is_decrypt: bool, success_count: int, total_ops: int, elapsed_time: float
+):
 	"""Log a success or failure summary for CLI file operations."""
 	action = 'Decryption' if is_decrypt else 'Encryption'
 	if total_ops > 0 and success_count == total_ops:
@@ -2459,7 +2461,7 @@ def main(argv=None):
 				'info', f'Output encrypted text length: {len(b64_result)} characters'
 			)
 			ConsoleLogger.show('success', 'Encryption completed successfully', icon='✅')
-			ConsoleLogger.show('info', f'Operations completed: 1/1', icon='✔️')
+			ConsoleLogger.show('info', 'Operations completed: 1/1', icon='✔️')
 			ConsoleLogger.show('info', f'Total time: {elapsed_time:.2f}s', icon='⏱️')
 		else:
 			ConsoleLogger.show('info', 'Decrypting text...')
@@ -2477,7 +2479,7 @@ def main(argv=None):
 					log_file=False,
 				)
 				ConsoleLogger.show('success', 'Decryption completed successfully', icon='✅')
-				ConsoleLogger.show('info', f'Operations completed: 1/1', icon='✔️')
+				ConsoleLogger.show('info', 'Operations completed: 1/1', icon='✔️')
 				ConsoleLogger.show('info', f'Total time: {elapsed_time:.2f}s', icon='⏱️')
 
 	elif args.file:
@@ -2707,7 +2709,7 @@ def main(argv=None):
 				sys.exit(1)
 		else:
 			ConsoleLogger.show('error', f'File not found: {args.file}')
-			ConsoleLogger.show('error', f'Operation failed: File does not exist')
+			ConsoleLogger.show('error', 'Operation failed: File does not exist')
 			ConsoleLogger.show('error', 'Please check the file path and try again')
 			sys.exit(1)
 

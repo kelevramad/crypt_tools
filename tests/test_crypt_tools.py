@@ -13,7 +13,6 @@ from crypt_tools import (
 	Config,
 	ConsoleLogger,
 	ShamirSecretSharing,
-	TerminalColors,
 	main,
 	parse_hidden_container_footer_from_path,
 )
@@ -175,7 +174,9 @@ def test_hidden_container_roundtrip(engine):
 			Config.KDF_PBKDF2,
 			Config.PBKDF2_ITERATIONS,
 		)
-		assert os.path.getsize(cont_path) > os.path.getsize(decoy_path) + os.path.getsize(secret_path)
+		assert os.path.getsize(cont_path) > os.path.getsize(decoy_path) + os.path.getsize(
+			secret_path
+		)
 
 		info = parse_hidden_container_footer_from_path(cont_path)
 		assert info is not None
@@ -375,7 +376,6 @@ def test_cli_integration(monkeypatch, capsys, mock_getpass):
 def test_cli_password_mismatch(monkeypatch, capsys):
 	"""Test that password verification failure exits."""
 	import getpass
-	import sys
 
 	# Mock getpass to return different passwords
 	# First call: "pass1", Second call: "pass2"
@@ -1664,7 +1664,7 @@ def test_inspect_file_argon2_kdf(tmp_path):
 	if not crypt_tools.ARGON2_AVAILABLE:
 		pytest.skip('argon2-cffi not installed')
 
-	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
+	from crypt_tools import CryptoEngine
 
 	password = 'testpass'
 	infile = tmp_path / 'argon2_data.txt'
