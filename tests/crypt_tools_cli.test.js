@@ -66,6 +66,35 @@ test('decrypts text with invalid base64 fails', () => {
   assert.match(dec.stdout + dec.stderr, /Decryption failed/);
 });
 
+test('rejects multiple passwords without threshold', () => {
+  const res = runCLI(['-t', 'hello', '-p', 'pass1', '-p', 'pass2']);
+  assert.equal(res.code, 1);
+  assert.match(res.stdout + res.stderr, /Multiple -p\/--password values require --threshold/);
+});
+
+test('allows multiple passwords without threshold in decrypt mode', () => {
+  const res = runCLI(['-d', '-t', '!!!notbase64!!!', '-p', 'pass1', '-p', 'pass2']);
+  assert.equal(res.code, 1);
+  assert.doesNotMatch(res.stdout + res.stderr, /Multiple -p\/--password values require --threshold/);
+});
+
+test('threshold decrypt accepts repeated password when distinct shares use the same secret', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-threshold-dup-'));
+  const infile = path.join(tmp, 'README.md');
+  fs.writeFileSync(infile, 'threshold duplicate password content', 'utf8');
+
+  const enc = runCLI(['-f', infile, '-p', '1', '-p', '1', '-p', '1', '--threshold', '2']);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+
+  const encFile = infile + '.enc';
+  const dec = runCLI(['-d', '-f', encFile, '-p', '1', '-p', '1']);
+  assert.equal(dec.code, 0, dec.stdout + dec.stderr);
+
+  const decFile = path.join(tmp, 'README.md.dec');
+  assert.ok(fs.existsSync(decFile));
+  assert.equal(fs.readFileSync(decFile, 'utf8'), 'threshold duplicate password content');
+});
+
 test('encrypts and decrypts file', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));
   const infile = path.join(tmp, 'a.txt');
@@ -628,9 +657,6 @@ test('inspect shows argon2 kdf', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
-
-
-
 
 
 

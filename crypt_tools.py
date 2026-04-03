@@ -18,7 +18,9 @@ import re
 import glob
 import tempfile
 from enum import StrEnum
-from typing import Optional
+from typing import Optional, List
+
+from shamir import ShamirSecretSharing
 
 # Third-party imports
 try:
@@ -64,6 +66,8 @@ class Config:
 	FLAG_COMPRESS = 0x01
 	FLAG_TEXT = 0x02
 	FLAG_KEYFILE = 0x04
+	FLAG_THRESHOLD = 0x08
+	THRESHOLD_MAGIC = b'CTTH'
 	KDF_PBKDF2 = 0x01
 	KDF_ARGON2 = 0x02
 	FIXED_HEADER_SIZE = 16
@@ -246,6 +250,13 @@ def _uint32_to_bytes(value: int) -> bytes:
 
 def _bytes_to_uint32(raw: bytes) -> int:
 	return int.from_bytes(raw, byteorder='big', signed=False)
+
+
+def _single_password_arg(password_value) -> str:
+	"""Normalize a CLI password argument to a single password string."""
+	if isinstance(password_value, list):
+		return password_value[0] if password_value else ''
+	return password_value or ''
 
 
 def _build_header(
@@ -793,9 +804,7 @@ class CryptoEngine:
 				)
 
 				desc = (
-					'[🔓] Decrypting & Decompressing'
-					if effective_compress
-					else '[🔓] Decrypting'
+					'[🔓] Decrypting & Decompressing' if effective_compress else '[🔓] Decrypting'
 				)
 				with (
 					open(output_path, 'wb') as fout,
@@ -901,9 +910,11 @@ class CryptoEngine:
 
 			outer_len = os.path.getsize(tmp_outer)
 			hidden_len = os.path.getsize(tmp_hidden)
-			with open(tmp_outer, 'rb') as fo, open(tmp_hidden, 'rb') as fh, open(
-				output_path, 'wb'
-			) as out:
+			with (
+				open(tmp_outer, 'rb') as fo,
+				open(tmp_hidden, 'rb') as fh,
+				open(output_path, 'wb') as out,
+			):
 				while True:
 					blk = fo.read(Config.CHUNK_SIZE)
 					if not blk:
@@ -1049,6 +1060,335 @@ class CryptoEngine:
 			)
 
 		return result
+
+	def encrypt_with_threshold(
+		self,
+		input_path: str,
+		output_path: str,
+		passwords: List[str],
+		threshold: int,
+		compress: bool = False,
+		keyfile_data: Optional[bytes] = None,
+		kdf_type: int = Config.KDF_PBKDF2,
+		iterations: int = Config.PBKDF2_ITERATIONS,
+	) -> bool:
+		"""Encrypt a file using threshold (Shamir's Secret Sharing) encryption."""
+		try:
+			num_passwords = len(passwords)
+			if threshold > num_passwords:
+				raise ValueError('Threshold cannot exceed number of passwords')
+			if threshold < 2:
+				raise ValueError('Threshold must be at least 2')
+
+			ConsoleLogger.show(
+				'debug',
+				f'Starting threshold file encryption: {num_passwords} passwords, threshold {threshold}',
+			)
+
+			master_key = os.urandom(Config.KEY_SIZE)
+			ConsoleLogger.show('debug', 'Generated master key for threshold encryption')
+
+			shares = ShamirSecretSharing.generate_shares(master_key, num_passwords, threshold)
+			ConsoleLogger.show(
+				'debug',
+				f"Generated {num_passwords} shares using Shamir's Secret Sharing",
+			)
+
+			file_size = os.path.getsize(input_path)
+			salt = os.urandom(Config.SALT_SIZE)
+			nonce = os.urandom(Config.NONCE_SIZE)
+			key = self._derive_key('threshold-dummy', salt, None, kdf_type, iterations)
+
+			header = _build_header(
+				compress=compress,
+				use_keyfile=keyfile_data is not None,
+				kdf_id=kdf_type,
+				iterations=iterations,
+			)
+			header_bytes = bytearray(header)
+			header_bytes[5] |= Config.FLAG_THRESHOLD
+			header = bytes(header_bytes)
+
+			cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+
+			desc = '[🔒] Compressing & Encrypting' if compress else '[🔒] Encrypting'
+
+			with open(input_path, 'rb') as fin, open(output_path, 'wb') as fout:
+				fout.write(header)
+				fout.write(salt)
+				fout.write(nonce)
+				fout.write(bytes([num_passwords, threshold]))
+
+				for i in range(num_passwords):
+					password_salt = os.urandom(Config.SALT_SIZE)
+					password_key = self._derive_key(
+						passwords[i], password_salt, keyfile_data, kdf_type, iterations
+					)
+					ConsoleLogger.show(
+						'debug',
+						f'Encrypting share {i} with password {passwords[i][:4]}... salt={password_salt.hex()[:8]}..., key={password_key.hex()[:16]}...',
+					)
+					encrypted_share = self._encrypt_share_with_password(shares[i], password_key)
+					fout.write(password_salt)
+					fout.write(encrypted_share)
+
+				with tqdm(total=file_size, unit='B', unit_scale=True, desc=desc) as pbar:
+					while True:
+						chunk = fin.read(Config.CHUNK_SIZE)
+						if not chunk:
+							break
+
+						if compress:
+							compressed_chunk = zlib.compress(chunk)
+							fout.write(cipher.encrypt(compressed_chunk))
+						else:
+							fout.write(cipher.encrypt(chunk))
+
+						pbar.update(len(chunk))
+
+				tag = cipher.digest()
+				fout.write(tag)
+
+			ConsoleLogger.show(
+				'success',
+				f'Threshold encryption complete ({num_passwords} passwords, {threshold} required)',
+			)
+			return True
+
+		except Exception as e:
+			ConsoleLogger.show('error', f'Threshold encryption error: {e}')
+			if os.path.exists(output_path):
+				os.remove(output_path)
+			return False
+
+	def _encrypt_share_with_password(self, share: bytes, password_key: bytes) -> bytes:
+		"""Encrypt a share with a password-derived key."""
+		nonce = os.urandom(Config.NONCE_SIZE)
+		cipher = AES.new(password_key, AES.MODE_GCM, nonce=nonce)
+		ciphertext, tag = cipher.encrypt_and_digest(share)
+		return nonce + ciphertext + tag
+
+	def _decrypt_share_with_password(self, encrypted_data: bytes, password_key: bytes) -> bytes:
+		"""Decrypt a share with a password-derived key."""
+		nonce = encrypted_data[: Config.NONCE_SIZE]
+		ciphertext = encrypted_data[Config.NONCE_SIZE : -Config.TAG_SIZE]
+		tag = encrypted_data[-Config.TAG_SIZE :]
+		cipher = AES.new(password_key, AES.MODE_GCM, nonce=nonce)
+		return cipher.decrypt_and_verify(ciphertext, tag)
+
+	def decrypt_with_threshold(
+		self,
+		input_path: str,
+		output_path: str,
+		passwords: List[str],
+		compress: bool = False,
+		keyfile_data: Optional[bytes] = None,
+		slice_start: int = 0,
+		slice_end: Optional[int] = None,
+	) -> bool:
+		"""Decrypt a file using threshold encryption."""
+		try:
+			file_size_on_disk = os.path.getsize(input_path)
+			end = file_size_on_disk if slice_end is None else slice_end
+			if slice_start < 0 or end > file_size_on_disk or slice_start >= end:
+				raise ValueError('Invalid decrypt byte range')
+
+			file_size = end - slice_start
+			ConsoleLogger.show('debug', f'Starting threshold file decryption: {input_path}')
+
+			with open(input_path, 'rb') as fin:
+				fin.seek(slice_start)
+				prefix = fin.read(Config.FIXED_HEADER_SIZE)
+
+				metadata = _parse_format_from_bytes(prefix, text_payload=False)
+				if not (metadata['flags'] & Config.FLAG_THRESHOLD):
+					raise ValueError('File is not encrypted with threshold mode')
+
+				if len(prefix) < metadata['header_len']:
+					prefix += fin.read(metadata['header_len'] - len(prefix))
+
+				salt = fin.read(metadata['salt_len'])
+				nonce = fin.read(metadata['nonce_len'])
+
+				num_and_thresh = fin.read(2)
+				num_passwords = num_and_thresh[0]
+				threshold = num_and_thresh[1]
+
+				ConsoleLogger.show(
+					'info',
+					f'Threshold encrypted: {num_passwords} passwords, {threshold} required to decrypt',
+				)
+
+				share_data_offset = (
+					slice_start
+					+ metadata['header_len']
+					+ metadata['salt_len']
+					+ metadata['nonce_len']
+					+ 2
+				)
+				encrypted_shares = []
+
+				for _ in range(num_passwords):
+					fin.seek(share_data_offset)
+					password_salt = fin.read(Config.SALT_SIZE)
+					share_data_offset += Config.SALT_SIZE
+
+					encrypted_share_len = Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE
+					encrypted_share = fin.read(encrypted_share_len)
+					share_data_offset += encrypted_share_len
+
+					encrypted_shares.append({'salt': password_salt, 'data': encrypted_share})
+
+			master_key = self._try_reconstruct_master_key(
+				input_path,
+				output_path,
+				encrypted_shares,
+				passwords,
+				threshold,
+				keyfile_data,
+				metadata,
+			)
+			if master_key is None:
+				raise ValueError('Failed to decrypt with provided passwords')
+
+			key = self._derive_key(
+				'threshold-dummy',
+				salt,
+				None,
+				metadata.get('kdf_id', Config.KDF_PBKDF2),
+				metadata.get('iterations', Config.PBKDF2_ITERATIONS),
+			)
+
+			decipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+
+			ciphertext_len = (
+				file_size
+				- metadata['header_len']
+				- metadata['salt_len']
+				- metadata['nonce_len']
+				- metadata['tag_len']
+				- 2
+				- (
+					num_passwords
+					* (Config.SALT_SIZE + Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE)
+				)
+			)
+			effective_compress = metadata['compress']
+			desc = '[🔓] Decrypting & Decompressing' if effective_compress else '[🔓] Decrypting'
+
+			with (
+				open(output_path, 'wb') as fout,
+				open(input_path, 'rb') as fin,
+				tqdm(total=ciphertext_len, unit='B', unit_scale=True, desc=desc) as pbar,
+			):
+				decompressor = zlib.decompressobj() if effective_compress else None
+				bytes_read = 0
+
+				fin.seek(share_data_offset)
+				while bytes_read < ciphertext_len:
+					read_size = min(Config.CHUNK_SIZE, ciphertext_len - bytes_read)
+					chunk = fin.read(read_size)
+					if not chunk:
+						break
+
+					decrypted_chunk = decipher.decrypt(chunk)
+
+					if decompressor:
+						decompressed_chunk = decompressor.decompress(decrypted_chunk)
+						if decompressed_chunk:
+							fout.write(decompressed_chunk)
+					else:
+						fout.write(decrypted_chunk)
+
+					bytes_read += len(chunk)
+					pbar.update(len(chunk))
+
+				tag = fin.read(metadata['tag_len'])
+				try:
+					decipher.verify(tag)
+				except ValueError:
+					ConsoleLogger.show('error', 'INTEGRITY CHECK FAILED!')
+					os.remove(output_path)
+					return False
+
+			ConsoleLogger.show('success', 'Threshold decryption successful')
+			return True
+
+		except Exception as e:
+			ConsoleLogger.show('error', f'Threshold decryption error: {e}')
+			if os.path.exists(output_path):
+				try:
+					os.remove(output_path)
+				except:
+					pass
+			return False
+
+	def _try_reconstruct_master_key(
+		self,
+		input_path: str,
+		output_path: str,
+		encrypted_shares: List[dict],
+		passwords: List[str],
+		threshold: int,
+		keyfile_data: Optional[bytes],
+		metadata: dict,
+	) -> Optional[bytes]:
+		"""Try to reconstruct the master key from passwords."""
+		kdf_type = metadata.get('kdf_id', Config.KDF_PBKDF2)
+		iterations = metadata.get('iterations', Config.PBKDF2_ITERATIONS)
+
+		ConsoleLogger.show(
+			'debug',
+			f'Trying to reconstruct with {len(passwords)} passwords and {len(encrypted_shares)} encrypted shares',
+		)
+
+		share_data_list = []
+		used_share_indexes = set()
+		recovered_share_ids = set()
+		for pw in passwords:
+			ConsoleLogger.show('debug', f'Trying password: {pw[:4]}...')
+			for idx, enc_share in enumerate(encrypted_shares):
+				if idx in used_share_indexes:
+					continue
+				try:
+					password_key = self._derive_key(
+						pw, enc_share['salt'], keyfile_data, kdf_type, iterations
+					)
+					ConsoleLogger.show(
+						'debug',
+						f'  Share {idx}: salt={enc_share["salt"].hex()[:8]}..., key={password_key.hex()[:16]}...',
+					)
+					share = self._decrypt_share_with_password(enc_share['data'], password_key)
+					ConsoleLogger.show('debug', f'  Share {idx} decrypted successfully!')
+					share_id = share[0]
+					if share_id in recovered_share_ids:
+						ConsoleLogger.show(
+							'debug',
+							f'  Share {idx} ignored because share id {share_id} is duplicated',
+						)
+						break
+					recovered_share_ids.add(share_id)
+					used_share_indexes.add(idx)
+					share_data_list.append(share)
+					break
+				except Exception as e:
+					ConsoleLogger.show('debug', f'  Failed share {idx}: {e}')
+					continue
+
+		if len(share_data_list) < threshold:
+			ConsoleLogger.show(
+				'error',
+				f'Not enough valid passwords provided. Need {threshold}, got {len(share_data_list)}',
+			)
+			return None
+
+		try:
+			master_key = ShamirSecretSharing.recover_secret(share_data_list[:threshold])
+			ConsoleLogger.show('debug', 'Successfully reconstructed master key')
+			return master_key
+		except Exception as e:
+			ConsoleLogger.show('error', f'Failed to reconstruct master key: {e}')
+			return None
 
 
 # =========================
@@ -1495,8 +1835,14 @@ def parse_args(argv=None):
 	parser.add_argument(
 		'-p',
 		'--password',
-		required=False,
-		help='Password (optional; prompt includes strength indicator)',
+		action='append',
+		default=[],
+		help='Password (can be specified multiple times for threshold mode)',
+	)
+	parser.add_argument(
+		'--threshold',
+		type=int,
+		help='Threshold for multi-signature mode (e.g., 2 for 2 of 3)',
 	)
 	parser.add_argument(
 		'--keyfile',
@@ -1552,6 +1898,20 @@ def parse_args(argv=None):
 	return parser.parse_args(argv)
 
 
+def _log_completion_summary(is_decrypt: bool, success_count: int, total_ops: int, elapsed_time: float):
+	"""Log a success or failure summary for CLI file operations."""
+	action = 'Decryption' if is_decrypt else 'Encryption'
+	if total_ops > 0 and success_count == total_ops:
+		ConsoleLogger.show('success', f'{action} completed successfully', icon='✅')
+	elif success_count == 0:
+		ConsoleLogger.show('error', f'{action} failed', icon='❌')
+	else:
+		ConsoleLogger.show('warning', f'{action} completed with failures', icon='⚠️')
+
+	ConsoleLogger.show('info', f'Operations completed: {success_count}/{total_ops}', icon='✔️')
+	ConsoleLogger.show('info', f'Total time: {elapsed_time:.2f}s', icon='⏱️')
+
+
 def main(argv=None):
 	Banner.show()
 	# If argv is None, argparse uses sys.argv[1:] automatically.
@@ -1596,6 +1956,27 @@ def main(argv=None):
 	if args.hidden and args.text:
 		ConsoleLogger.show('error', '--hidden applies only to file decryption')
 		sys.exit(1)
+	if len(args.password) > 1 and not args.threshold and not args.decrypt:
+		ConsoleLogger.show(
+			'error',
+			'Multiple -p/--password values require --threshold',
+		)
+		sys.exit(1)
+	if args.threshold:
+		if args.threshold < 2:
+			ConsoleLogger.show('error', '--threshold must be at least 2')
+			sys.exit(1)
+		if args.threshold > len(args.password):
+			ConsoleLogger.show(
+				'warning',
+				f'--threshold is {args.threshold} but only {len(args.password)} passwords provided via -p',
+			)
+		if args.text:
+			ConsoleLogger.show('error', '--threshold applies only to file encryption/decryption')
+			sys.exit(1)
+		if args.hidden_vol:
+			ConsoleLogger.show('error', '--threshold cannot be used with --hidden-vol')
+			sys.exit(1)
 
 	# Enable logging FIRST if --log flag is set
 	if args.log:
@@ -1882,18 +2263,41 @@ def main(argv=None):
 			ConsoleLogger.show('info', 'Hidden volume password entered', icon='🔑')
 		else:
 			ConsoleLogger.show('debug', 'Hidden password provided via command line')
-	elif args.password is None and not args.inspect:
-		if args.decrypt and args.hidden and args.password_hidden is not None:
-			args.password = args.password_hidden
-			ConsoleLogger.show('debug', 'Using --password-hidden for inner decrypt')
-		elif not args.decrypt:
-			args.password = getpass_verify_with_strength()
-			ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
+	elif args.threshold:
+		num_passwords_needed = args.threshold
+		if len(args.password) < num_passwords_needed:
+			ConsoleLogger.show('info', f'Threshold mode: need {num_passwords_needed} passwords')
+			for i in range(len(args.password), num_passwords_needed):
+				pw = getpass_with_strength(f'Enter password {i + 1}/{num_passwords_needed}: ')
+				if not pw:
+					ConsoleLogger.show('error', 'Password cannot be empty')
+					sys.exit(1)
+				args.password.append(pw)
 		else:
-			args.password = getpass_with_strength()
-			ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
+			ConsoleLogger.show(
+				'debug',
+				f'Using all {len(args.password)} provided passwords for threshold encryption',
+			)
 	elif not args.inspect:
-		ConsoleLogger.show('debug', 'Password provided via command line')
+		# For non-threshold mode, only convert to string if exactly one password provided
+		if args.password and len(args.password) == 1:
+			args.password = args.password[0]
+			ConsoleLogger.show('debug', 'Password provided via command line')
+		elif args.password and len(args.password) > 1:
+			ConsoleLogger.show(
+				'debug',
+				f'Using {len(args.password)} provided passwords for decrypt auto-detection',
+			)
+		else:
+			if args.decrypt and args.hidden and args.password_hidden is not None:
+				args.password = args.password_hidden
+				ConsoleLogger.show('debug', 'Using --password-hidden for inner decrypt')
+			elif not args.decrypt:
+				args.password = getpass_verify_with_strength()
+				ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
+			else:
+				args.password = getpass_with_strength()
+				ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
 
 	if args.text:
 		start_time = time.time()
@@ -2071,11 +2475,24 @@ def main(argv=None):
 							kdf_type,
 							iterations,
 						)
-					else:
-						ok = engine.encrypt_file(
+					elif args.threshold:
+						ok = engine.encrypt_with_threshold(
 							target,
 							output_file,
 							args.password,
+							args.threshold,
+							args.compress,
+							keyfile_data,
+							kdf_type,
+							iterations,
+						)
+					else:
+						# For non-threshold encryption, extract single password from list
+						single_password = _single_password_arg(args.password)
+						ok = engine.encrypt_file(
+							target,
+							output_file,
+							single_password,
 							args.compress,
 							keyfile_data,
 							kdf_type,
@@ -2099,9 +2516,34 @@ def main(argv=None):
 						)
 						ok = False
 					else:
-						ok = engine.decrypt_file(
-							target, output_file, args.password, args.compress, keyfile_data
-						)
+						# Check if file is threshold-encrypted by reading its header
+						is_threshold_file = False
+						try:
+							with open(target, 'rb') as f:
+								header = f.read(16)
+								if header[:4] == Config.MAGIC:
+									flags = header[5]
+									is_threshold_file = bool(flags & Config.FLAG_THRESHOLD)
+						except Exception:
+							pass
+
+						if args.threshold or is_threshold_file:
+							ConsoleLogger.show(
+								'debug', f'Decrypting with threshold, passwords: {args.password}'
+							)
+							ok = engine.decrypt_with_threshold(
+								target,
+								output_file,
+								args.password,
+								args.compress,
+								keyfile_data,
+							)
+						else:
+							# For non-threshold files, extract single password from list
+							single_password = _single_password_arg(args.password)
+							ok = engine.decrypt_file(
+								target, output_file, single_password, args.compress, keyfile_data
+							)
 				if ok:
 					success_count += 1
 					ConsoleLogger.show(
@@ -2115,18 +2557,7 @@ def main(argv=None):
 			elapsed_time = time.time() - start_time
 			total_ops = success_count + fail_count
 
-			ConsoleLogger.show(
-				'success',
-				f'{"Decryption" if args.decrypt else "Encryption"} completed successfully',
-				icon='✅',
-			)
-			if total_ops == 1 and success_count == 1:
-				ConsoleLogger.show('info', 'Operations completed: 1/1', icon='✔️')
-			else:
-				ConsoleLogger.show(
-					'info', f'Operations completed: {success_count}/{total_ops}', icon='✔️'
-				)
-			ConsoleLogger.show('info', f'Total time: {elapsed_time:.2f}s', icon='⏱️')
+			_log_completion_summary(args.decrypt, success_count, total_ops, elapsed_time)
 
 			if fail_count > 0:
 				sys.exit(1)

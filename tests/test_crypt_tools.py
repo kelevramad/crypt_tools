@@ -8,6 +8,7 @@ import runpy
 import types
 import sys
 import builtins
+from shamir import ShamirSecretSharing
 from crypt_tools import (
 	CryptoEngine,
 	Config,
@@ -77,6 +78,30 @@ def test_decryption_wrong_password(engine):
 
 	result = engine.decrypt_data(encrypted, 'WRONG_PASS')
 	assert result is None
+
+
+def test_shamir_rejects_duplicate_shares():
+	"""Duplicate shares must not be accepted for recovery."""
+	shares = ShamirSecretSharing.generate_shares(b'secret-data', 3, 2)
+	with pytest.raises(ValueError, match='Duplicate shares'):
+		ShamirSecretSharing.recover_secret([shares[0], shares[0]])
+
+
+def test_threshold_decrypt_rejects_duplicate_passwords(engine):
+	"""Threshold decrypt must fail if the same password is provided twice."""
+	passwords = ['1', '2', '3']
+
+	with tempfile.TemporaryDirectory() as tmpdir:
+		input_path = os.path.join(tmpdir, 'plain.txt')
+		enc_path = os.path.join(tmpdir, 'plain.txt.enc')
+		dec_path = os.path.join(tmpdir, 'plain.txt.dec')
+
+		with open(input_path, 'wb') as f:
+			f.write(b'threshold protected content')
+
+		assert engine.encrypt_with_threshold(input_path, enc_path, passwords, 2)
+		assert not engine.decrypt_with_threshold(enc_path, dec_path, ['1', '1'])
+		assert not os.path.exists(dec_path)
 
 
 def test_file_encryption_decryption(engine):
@@ -364,6 +389,26 @@ def test_cli_password_mismatch(monkeypatch, capsys):
 	assert excinfo.value.code == 1
 	captured = capsys.readouterr()
 	assert 'Passwords do not match!' in captured.out
+
+
+def test_cli_multiple_passwords_require_threshold(capsys):
+	"""Test repeated -p values are rejected without --threshold."""
+	with pytest.raises(SystemExit) as excinfo:
+		main(['--encrypt', '-t', 'hello', '-p', 'pass1', '-p', 'pass2'])
+
+	assert excinfo.value.code == 1
+	captured = capsys.readouterr()
+	assert 'Multiple -p/--password values require --threshold' in captured.out
+
+
+def test_cli_decrypt_allows_multiple_passwords_without_threshold(capsys):
+	"""Test repeated -p values remain allowed in decrypt mode."""
+	with pytest.raises(SystemExit) as excinfo:
+		main(['--decrypt', '-f', 'missing.enc', '-p', 'pass1', '-p', 'pass2'])
+
+	assert excinfo.value.code == 1
+	captured = capsys.readouterr()
+	assert 'Multiple -p/--password values require --threshold' not in captured.out
 
 
 def test_recursive_directory(engine):

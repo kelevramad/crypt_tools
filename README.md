@@ -137,6 +137,16 @@ uv run crypt_tools.py --encrypt -f document.txt -p "your_password" --kdf argon2 
 uv run crypt_tools.py --decrypt -f document.enc -p "your_password"
 ```
 
+### Threshold passwords
+
+Threshold mode splits a file key into password-protected Shamir shares.
+
+- Encrypt threshold files by repeating `-p` and supplying `--threshold`, for example `-p 1 -p 2 -p 3 --threshold 2`.
+- Repeated passwords are allowed. If you encrypt with `-p 1 -p 1 -p 1 --threshold 2`, then decrypting with `-p 1 -p 1` is valid because those password attempts unlock two distinct stored shares.
+- Encrypt mode rejects multiple `-p` values unless `--threshold` is present.
+- Decrypt mode does not require `--threshold`; the CLI auto-detects threshold-encrypted files from the header.
+- Duplicate password attempts only count if they unlock distinct shares. Reusing the same password against the same share twice does not satisfy the threshold.
+
 ### Hidden volumes (plausible deniability)
 
 Create a single encrypted file that contains **two** independent AES-GCM payloads: an **outer/decoy** file (opened with the decoy password) and a **hidden** file (opened with the hidden password). On disk the layout is:

@@ -14,6 +14,7 @@ const zlib = require('zlib');
 const { finished, pipeline } = require('stream/promises');
 const { program } = require('commander');
 const ProgressBar = require('progress');
+const Shamir = require('./shamir.js');
 
 let argon2;
 let ARGON2_AVAILABLE = false;
@@ -39,6 +40,8 @@ class Config {
     static FLAG_COMPRESS = 0x01;
     static FLAG_TEXT = 0x02;
     static FLAG_KEYFILE = 0x04;
+    static FLAG_THRESHOLD = 0x08;
+    static THRESHOLD_MAGIC = Buffer.from('CTTH');
     static KDF_PBKDF2 = 0x01;
     static KDF_ARGON2 = 0x02;
     static FIXED_HEADER_SIZE = 16;
@@ -224,6 +227,26 @@ function createTqdmBar(label, total) {
             bar.tick(len, tokens);
         }
     };
+}
+
+function singlePasswordArg(passwordValue) {
+    if (Array.isArray(passwordValue)) {
+        return passwordValue[0] || '';
+    }
+    return passwordValue || '';
+}
+
+function logCompletionSummary(isDecrypt, successCount, totalOps, elapsedSec) {
+    const action = isDecrypt ? 'Decryption' : 'Encryption';
+    if (totalOps > 0 && successCount === totalOps) {
+        ConsoleLogger.show('success', `${action} completed successfully`, '✅');
+    } else if (successCount === 0) {
+        ConsoleLogger.show('error', `${action} failed`, '❌');
+    } else {
+        ConsoleLogger.show('warning', `${action} completed with failures`, '⚠️');
+    }
+    ConsoleLogger.show('info', `Operations completed: ${successCount}/${totalOps}`, '✔️');
+    ConsoleLogger.show('info', `Total time: ${elapsedSec.toFixed(2)}s`, '⏱️');
 }
 
 class Banner {
@@ -892,6 +915,249 @@ class CryptoEngine {
 
         return result;
     }
+
+    async encryptWithThreshold(inputPath, outputPath, passwords, threshold, compress = false, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
+        try {
+            const numPasswords = passwords.length;
+            if (threshold > numPasswords) {
+                throw new Error('Threshold cannot exceed number of passwords');
+            }
+            if (threshold < 2) {
+                throw new Error('Threshold must be at least 2');
+            }
+
+            ConsoleLogger.show('debug', `Starting threshold file encryption: ${numPasswords} passwords, threshold ${threshold}`);
+
+            const masterKey = crypto.randomBytes(Config.KEY_SIZE);
+            ConsoleLogger.show('debug', 'Generated master key for threshold encryption');
+
+            const shares = Shamir.generateShares(masterKey, numPasswords, threshold);
+            ConsoleLogger.show('debug', `Generated ${numPasswords} shares using Shamir's Secret Sharing`);
+
+            const fileSize = fs.statSync(inputPath).size;
+            const salt = crypto.randomBytes(Config.SALT_SIZE);
+            const nonce = crypto.randomBytes(Config.NONCE_SIZE);
+            const key = await this._deriveKey('threshold-dummy', salt, null, kdfType, iterations);
+
+            const header = buildHeader({ compress, useKeyfile: keyfileData !== null, kdfId: kdfType, iterations });
+            header[5] |= Config.FLAG_THRESHOLD;
+
+            const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+
+            const label = compress ? '[🔒] Compressing & Encrypting:' : '[🔒] Encrypting:';
+            const progress = createTqdmBar(label, fileSize);
+            progress.render();
+
+            const outputStream = fs.createWriteStream(outputPath);
+            outputStream.write(header);
+            outputStream.write(salt);
+            outputStream.write(nonce);
+
+            outputStream.write(Buffer.from([numPasswords, threshold]));
+
+            for (let i = 0; i < numPasswords; i++) {
+                const passwordSalt = crypto.randomBytes(Config.SALT_SIZE);
+                const passwordKey = await this._deriveKey(passwords[i], passwordSalt, keyfileData, kdfType, iterations);
+                const encryptedShare = this._encryptShareWithPassword(shares[i], passwordKey);
+                outputStream.write(passwordSalt);
+                outputStream.write(encryptedShare);
+            }
+
+            const readStream = fs.createReadStream(inputPath, { highWaterMark: Config.CHUNK_SIZE });
+            readStream.on('data', (chunk) => progress.tick(chunk.length));
+
+            let sourceStream = readStream;
+            if (compress) {
+                const deflater = zlib.createDeflate({ level: 9 });
+                sourceStream = sourceStream.pipe(deflater);
+            }
+
+            sourceStream.pipe(cipher).pipe(outputStream, { end: false });
+            await finished(cipher);
+
+            const tag = cipher.getAuthTag();
+            outputStream.write(tag);
+            outputStream.end();
+            await finished(outputStream);
+
+            ConsoleLogger.show('success', `Threshold encryption complete (${numPasswords} passwords, ${threshold} required)`);
+            return true;
+
+        } catch (err) {
+            ConsoleLogger.show('error', `Threshold encryption error: ${err.message}`);
+            if (fs.existsSync(outputPath)) {
+                fs.unlinkSync(outputPath);
+            }
+            return false;
+        }
+    }
+
+    _encryptShareWithPassword(share, passwordKey) {
+        const nonce = crypto.randomBytes(Config.NONCE_SIZE);
+        const cipher = crypto.createCipheriv('aes-256-gcm', passwordKey, nonce);
+        const encrypted = Buffer.concat([cipher.update(share), cipher.final()]);
+        const tag = cipher.getAuthTag();
+        return Buffer.concat([nonce, encrypted, tag]);
+    }
+
+    _decryptShareWithPassword(encryptedData, passwordKey) {
+        const nonce = encryptedData.subarray(0, Config.NONCE_SIZE);
+        const ciphertext = encryptedData.subarray(Config.NONCE_SIZE, -Config.TAG_SIZE);
+        const tag = encryptedData.subarray(-Config.TAG_SIZE);
+
+        const decipher = crypto.createDecipheriv('aes-256-gcm', passwordKey, nonce);
+        decipher.setAuthTag(tag);
+        return Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+    }
+
+    async decryptWithThreshold(inputPath, outputPath, passwords, compress = false, keyfileData = null, sliceStart = 0, sliceEnd = null) {
+        try {
+            const fileSizeOnDisk = fs.statSync(inputPath).size;
+            const end = sliceEnd == null ? fileSizeOnDisk : sliceEnd;
+            if (sliceStart < 0 || end > fileSizeOnDisk || sliceStart >= end) {
+                throw new Error('Invalid decrypt byte range');
+            }
+
+            const fileSize = end - sliceStart;
+            ConsoleLogger.show('debug', `Starting threshold file decryption: ${inputPath}`);
+
+            const fd = fs.openSync(inputPath, 'r');
+            let prefix = Buffer.alloc(Math.min(Config.FIXED_HEADER_SIZE, fileSize));
+            fs.readSync(fd, prefix, 0, prefix.length, sliceStart);
+
+            const metadata = parseFormatFromBuffer(prefix, { textPayload: false });
+            if (!(metadata.flags & Config.FLAG_THRESHOLD)) {
+                throw new Error('File is not encrypted with threshold mode');
+            }
+
+            if (prefix.length < metadata.headerLen) {
+                prefix = Buffer.alloc(metadata.headerLen);
+                fs.readSync(fd, prefix, 0, metadata.headerLen, sliceStart);
+            }
+
+            const salt = Buffer.alloc(metadata.saltLen);
+            const nonce = Buffer.alloc(metadata.nonceLen);
+            fs.readSync(fd, salt, 0, metadata.saltLen, sliceStart + metadata.headerLen);
+            fs.readSync(fd, nonce, 0, metadata.nonceLen, sliceStart + metadata.headerLen + metadata.saltLen);
+
+            const numSharesAndThreshold = Buffer.alloc(2);
+            fs.readSync(fd, numSharesAndThreshold, 0, 2, sliceStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen);
+            const numPasswords = numSharesAndThreshold[0];
+            const threshold = numSharesAndThreshold[1];
+
+            ConsoleLogger.show('info', `Threshold encrypted: ${numPasswords} passwords, ${threshold} required to decrypt`);
+
+            let shareDataOffset = sliceStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen + 2;
+            const encryptedShares = [];
+
+            for (let i = 0; i < numPasswords; i++) {
+                const passwordSalt = Buffer.alloc(Config.SALT_SIZE);
+                fs.readSync(fd, passwordSalt, 0, Config.SALT_SIZE, shareDataOffset);
+                shareDataOffset += Config.SALT_SIZE;
+
+                const encryptedShareLen = Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE;
+                const encryptedShare = Buffer.alloc(encryptedShareLen);
+                fs.readSync(fd, encryptedShare, 0, encryptedShareLen, shareDataOffset);
+                shareDataOffset += encryptedShareLen;
+
+                encryptedShares.push({ salt: passwordSalt, data: encryptedShare });
+            }
+
+            fs.closeSync(fd);
+
+            const masterKey = await this._tryReconstructMasterKey(inputPath, outputPath, encryptedShares, passwords, threshold, keyfileData, metadata);
+            if (!masterKey) {
+                throw new Error('Failed to decrypt with provided passwords');
+            }
+
+            const key = await this._deriveKey('threshold-dummy', salt, null, metadata.kdfId || Config.KDF_PBKDF2, metadata.iterations || Config.PBKDF2_ITERATIONS);
+
+            const fileData = fs.readFileSync(inputPath);
+            const ciphertextLen = fileSize - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen - 2 - (numPasswords * (Config.SALT_SIZE + Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE));
+            const cipherStart = shareDataOffset;
+            const ciphertext = fileData.subarray(cipherStart, cipherStart + ciphertextLen);
+            const tag = fileData.subarray(-metadata.tagLen);
+            ConsoleLogger.show('debug', `cipherStart=${cipherStart}, ciphertextLen=${ciphertextLen}`);
+            
+            const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+            decipher.setAuthTag(tag);
+
+            const effectiveCompress = metadata.compress;
+            const label = effectiveCompress ? '[🔓] Decrypting & Decompressing:' : '[🔓] Decrypting:';
+            const progress = createTqdmBar(label, ciphertextLen);
+            progress.render();
+            
+            progress.tick(ciphertextLen);
+            
+            const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+            
+            if (effectiveCompress) {
+                const decompressor = zlib.createInflate();
+                const decompressed = decompressor.decrypt(decrypted);
+                fs.writeFileSync(outputPath, decompressed);
+            } else {
+                fs.writeFileSync(outputPath, decrypted);
+            }
+
+            ConsoleLogger.show('success', 'Threshold decryption successful');
+            return true;
+
+        } catch (err) {
+            ConsoleLogger.show('error', `Threshold decryption error: ${err.message}`);
+            if (fs.existsSync(outputPath)) {
+                try { fs.unlinkSync(outputPath); } catch (e) { }
+            }
+            return false;
+        }
+    }
+
+    async _tryReconstructMasterKey(inputPath, outputPath, encryptedShares, passwords, threshold, keyfileData, metadata) {
+        const kdfType = metadata.kdfId || Config.KDF_PBKDF2;
+        const iterations = metadata.iterations || Config.PBKDF2_ITERATIONS;
+
+        const shareDataList = [];
+        const usedShareIndexes = new Set();
+        const recoveredShareIds = new Set();
+        for (const pw of passwords) {
+            for (let idx = 0; idx < encryptedShares.length; idx++) {
+                if (usedShareIndexes.has(idx)) {
+                    continue;
+                }
+
+                const encShare = encryptedShares[idx];
+                try {
+                    const passwordKey = await this._deriveKey(pw, encShare.salt, keyfileData, kdfType, iterations);
+                    const share = this._decryptShareWithPassword(encShare.data, passwordKey);
+                    const shareId = share[0];
+                    if (recoveredShareIds.has(shareId)) {
+                        break;
+                    }
+
+                    recoveredShareIds.add(shareId);
+                    usedShareIndexes.add(idx);
+                    shareDataList.push(share);
+                    ConsoleLogger.show('debug', 'Successfully decrypted a share with password');
+                    break;
+                } catch (e) {
+                    continue;
+                }
+            }
+        }
+
+        if (shareDataList.length < threshold) {
+            ConsoleLogger.show('error', `Not enough valid passwords provided. Need ${threshold}, got ${shareDataList.length}`);
+            return null;
+        }
+
+        try {
+            const masterKey = Shamir.recoverSecret(shareDataList.slice(0, threshold));
+            ConsoleLogger.show('debug', 'Successfully reconstructed master key');
+            return masterKey;
+        } catch (err) {
+            ConsoleLogger.show('error', `Failed to reconstruct master key: ${err.message}`);
+            return null;
+        }
+    }
 }
 
 // =========================
@@ -1184,6 +1450,31 @@ async function getpassVerifyWithStrength(prompt1 = 'Enter Password: ', prompt2 =
 }
 
 // =========================
+// Threshold Password Collection
+// =========================
+
+async function getThresholdPasswords(numPasswords, threshold, providedPasswords) {
+    if (providedPasswords && providedPasswords.length > 0) {
+        if (providedPasswords.length < threshold) {
+            ConsoleLogger.show('error', `Need at least ${threshold} passwords for threshold mode, but only ${providedPasswords.length} provided`);
+            process.exit(1);
+        }
+        return providedPasswords;
+    }
+
+    const passwords = [];
+    for (let i = 0; i < numPasswords; i++) {
+        const pw = await getpassWithStrength(`Enter password ${i + 1}/${numPasswords}: `);
+        if (!pw) {
+            ConsoleLogger.show('error', 'Password cannot be empty');
+            process.exit(1);
+        }
+        passwords.push(pw);
+    }
+    return passwords;
+}
+
+// =========================
 // CLI Logic
 // =========================
 
@@ -1198,7 +1489,8 @@ async function main() {
         .option('-t, --text <text>', 'Text to process')
         .option('-f, --file <path>', 'File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
         .option('-o, --output <path>', 'Output file path')
-        .option('-p, --password <password>', 'Password (optional; prompt includes strength indicator)')
+        .option('-p, --password <password>', 'Password (can be specified multiple times for threshold mode)', (val, arr) => [...arr, val], [])
+        .option('--threshold <number>', 'Threshold for multi-signature mode (e.g., 2 for 2 of 3)', parseInt)
         .option('--keyfile <path>', 'Key file path for encryption/decryption (use with or without password)')
         .option('-c, --compress', 'Enable compression', false)
         .option('--hidden-vol', 'Encrypt decoy (-f) and hidden (--hidden-file) into one container (single file only)', false)
@@ -1281,6 +1573,27 @@ async function main() {
         if (options.hidden && options.text) {
             ConsoleLogger.show('error', '--hidden applies only to file decryption');
             process.exit(1);
+        }
+        if ((options.password ? options.password.length : 0) > 1 && !options.threshold && !options.decrypt) {
+            ConsoleLogger.show('error', 'Multiple -p/--password values require --threshold');
+            process.exit(1);
+        }
+        if (options.threshold) {
+            if (options.threshold < 2) {
+                ConsoleLogger.show('error', '--threshold must be at least 2');
+                process.exit(1);
+            }
+            if (options.threshold > (options.password ? options.password.length : 0)) {
+                ConsoleLogger.show('warning', `--threshold is ${options.threshold} but only ${options.password ? options.password.length : 0} passwords provided via -p`);
+            }
+            if (options.text) {
+                ConsoleLogger.show('error', '--threshold applies only to file encryption/decryption');
+                process.exit(1);
+            }
+            if (options.hiddenVol) {
+                ConsoleLogger.show('error', '--threshold cannot be used with --hidden-vol');
+                process.exit(1);
+            }
         }
     }
 
@@ -1502,7 +1815,7 @@ async function main() {
         } else {
             ConsoleLogger.show('debug', 'Hidden password provided via command line');
         }
-    } else if (!options.inspect && options.password === undefined) {
+    } else if (!options.inspect && (!options.password || options.password.length === 0)) {
         if (options.decrypt && options.hidden && options.passwordHidden !== undefined) {
             options.password = options.passwordHidden;
             ConsoleLogger.show('debug', 'Using --password-hidden for inner decrypt');
@@ -1513,8 +1826,20 @@ async function main() {
             options.password = await getpassWithStrength();
             ConsoleLogger.show('info', 'Password entered by user', '🔑');
         }
+    } else if (!options.inspect && options.threshold) {
+        const numPasswords = options.password ? options.password.length : 0;
+        if (numPasswords < options.threshold) {
+            ConsoleLogger.show('info', `Threshold mode: need ${options.threshold} passwords`);
+            const providedPasswords = options.password || [];
+            options.password = await getThresholdPasswords(options.threshold, options.threshold, providedPasswords);
+        } else {
+            ConsoleLogger.show('debug', `Using all ${numPasswords} provided passwords for threshold encryption`);
+        }
     } else if (!options.inspect) {
-        ConsoleLogger.show('debug', 'Password provided via command line');
+        if (options.password && options.password.length === 1) {
+            options.password = options.password[0];
+            ConsoleLogger.show('debug', 'Password provided via command line');
+        }
     }
 
     if (options.text) {
@@ -1625,9 +1950,7 @@ async function main() {
             ConsoleLogger.show('info', `Failed: ${failCount}`);
 
             // Display completion summary
-            ConsoleLogger.show('success', `${options.decrypt ? 'Decryption' : 'Encryption'} completed successfully`, '✅');
-            ConsoleLogger.show('info', `Operations completed: ${successCount}/${totalOps}`, '✔️');
-            ConsoleLogger.show('info', `Total time: ${elapsed.toFixed(2)}s`, '⏱️');
+            logCompletionSummary(options.decrypt, successCount, totalOps, elapsed);
 
         } else if (fs.existsSync(options.file) || (fileList && fileList.length > 0)) {
             const targets = (fileList && fileList.length > 0) ? fileList : [options.file];
@@ -1668,8 +1991,21 @@ async function main() {
                             kdfType,
                             iterations
                         );
+                    } else if (options.threshold) {
+                        ok = await engine.encryptWithThreshold(
+                            target,
+                            outputFile,
+                            options.password,
+                            options.threshold,
+                            options.compress,
+                            keyfileData,
+                            kdfType,
+                            iterations
+                        );
                     } else {
-                        ok = await engine.encryptFile(target, outputFile, options.password, options.compress, keyfileData, kdfType, iterations);
+                        // For non-threshold encryption, extract single password from array
+                        const singlePassword = singlePasswordArg(options.password);
+                        ok = await engine.encryptFile(target, outputFile, singlePassword, options.compress, keyfileData, kdfType, iterations);
                     }
                 } else {
                     const foot = parseHiddenContainerFooterFromPath(target);
@@ -1683,7 +2019,34 @@ async function main() {
                         ConsoleLogger.show('error', '--hidden only applies to files with a CTHV hidden-volume footer.');
                         ok = false;
                     } else {
-                        ok = await engine.decryptFile(target, outputFile, options.password, options.compress, keyfileData);
+                        // Check if file is threshold-encrypted by reading its header
+                        let isThresholdFile = false;
+                        try {
+                            const fd = fs.openSync(target, 'r');
+                            const headerBuf = Buffer.alloc(16);
+                            fs.readSync(fd, headerBuf, 0, 16, 0);
+                            fs.closeSync(fd);
+                            if (headerBuf[0] === 0x43 && headerBuf[1] === 0x54 && headerBuf[2] === 0x30 && headerBuf[3] === 0x32) {
+                                const flags = headerBuf[5];
+                                isThresholdFile = Boolean(flags & Config.FLAG_THRESHOLD);
+                            }
+                        } catch (e) {
+                            // Ignore and use default decrypt
+                        }
+
+                        if (isThresholdFile || options.threshold) {
+                            ok = await engine.decryptWithThreshold(
+                                target,
+                                outputFile,
+                                options.password,
+                                options.compress,
+                                keyfileData
+                            );
+                        } else {
+                            // For non-threshold files, extract single password from array
+                            const singlePassword = singlePasswordArg(options.password);
+                            ok = await engine.decryptFile(target, outputFile, singlePassword, options.compress, keyfileData);
+                        }
                     }
                 }
 
@@ -1699,14 +2062,7 @@ async function main() {
             const elapsed = (Date.now() - startTime) / 1000;
             const totalOps = successCount + failCount;
 
-            if (totalOps === 1 && successCount === 1) {
-                ConsoleLogger.show('success', `${options.decrypt ? 'Decryption' : 'Encryption'} completed successfully`, '✅');
-                ConsoleLogger.show('info', 'Operations completed: 1/1', '✔️');
-            } else {
-                ConsoleLogger.show('success', `${options.decrypt ? 'Decryption' : 'Encryption'} completed successfully`, '✅');
-                ConsoleLogger.show('info', `Operations completed: ${successCount}/${totalOps}`, '✔️');
-            }
-            ConsoleLogger.show('info', `Total time: ${elapsed.toFixed(2)}s`, '⏱️');
+            logCompletionSummary(options.decrypt, successCount, totalOps, elapsed);
 
             if (failCount > 0) {
                 process.exit(1);

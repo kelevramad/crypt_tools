@@ -135,6 +135,16 @@ node crypt_tools.js --encrypt -f document.txt -p "your_password" --kdf argon2 --
 node crypt_tools.js --decrypt -f document.enc -p "your_password"
 ```
 
+### Threshold passwords
+
+Threshold mode stores one Shamir share per `-p` value and requires `--threshold` during encryption.
+
+- Encrypt with repeated `-p` plus `--threshold`, for example `node crypt_tools.js -f README.md -p 1 -p 2 -p 3 --threshold 2`.
+- Repeated passwords are valid. If multiple shares were encrypted with the same password, decrypting with that same repeated password works as long as each attempt unlocks a distinct stored share.
+- Encrypt mode rejects multiple `-p` values without `--threshold`.
+- Decrypt mode auto-detects threshold files from the header, so `--threshold` is optional there.
+- Duplicate password attempts do not count twice unless they recover different share IDs.
+
 ### Hidden volumes (plausible deniability)
 
 Behavior matches the Python CLI: outer and hidden payloads are separate `CT02` messages; the file ends with `CTHV` plus the outer blob length. This is a **file** feature, not full-disk VeraCrypt; the footer and file length are visible. Use `--hidden-vol` with `-f` (decoy) and `--hidden-file` (secret). Decrypt outer with `-d -p`; decrypt hidden with `-d --hidden -p`. No `--recursive`/wildcards for `--hidden-vol`. See [README.md](README.md) for the full format diagram and caveats.
