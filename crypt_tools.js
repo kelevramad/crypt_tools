@@ -14,7 +14,6 @@ const zlib = require('zlib');
 const { finished, pipeline } = require('stream/promises');
 const { program } = require('commander');
 const ProgressBar = require('progress');
-const Shamir = require('./shamir.js');
 
 let argon2;
 let ARGON2_AVAILABLE = false;
@@ -23,6 +22,113 @@ try {
     ARGON2_AVAILABLE = true;
 } catch (e) {
     // Argon2 not available
+}
+
+// =========================
+// Shamir's Secret Sharing
+// =========================
+
+class ShamirSecretSharing {
+    static gfmul(a, b) {
+        let result = 0;
+        while (b > 0) {
+            if (b & 1) result ^= a;
+            const highBit = a & 0x80;
+            a = (a << 1) & 0xff;
+            if (highBit) a ^= 0x1b;
+            b >>= 1;
+        }
+        return result;
+    }
+
+    static gfexp(base, exp) {
+        let result = 1;
+        for (let i = 0; i < exp; i++) {
+            result = this.gfmul(result, base);
+        }
+        return result;
+    }
+
+    static gfinv(a) {
+        if (a === 0) return 0;
+        return this.gfexp(a, 254);
+    }
+
+    static gfdiv(a, b) {
+        if (b === 0) throw new Error('Division by zero');
+        return this.gfmul(a, this.gfinv(b));
+    }
+
+    static generateShares(secret, numShares, threshold) {
+        if (threshold > numShares) {
+            throw new Error('Threshold cannot exceed number of shares');
+        }
+        if (threshold < 2) {
+            throw new Error('Threshold must be at least 2');
+        }
+        if (secret.length === 0) {
+            throw new Error('Secret cannot be empty');
+        }
+
+        const coeffs = [];
+        for (let k = 0; k < threshold - 1; k++) {
+            coeffs.push(crypto.randomBytes(1)[0]);
+        }
+
+        const shares = [];
+        for (let i = 0; i < numShares; i++) {
+            const share = Buffer.alloc(secret.length + 1);
+            share[0] = i + 1;
+            const x = i + 1;
+
+            for (let j = 0; j < secret.length; j++) {
+                let y = secret[j];
+                for (let deg = 1; deg < threshold; deg++) {
+                    y ^= this.gfmul(coeffs[deg - 1], this.gfexp(x, deg));
+                }
+                share[j + 1] = y;
+            }
+
+            shares.push(share);
+        }
+
+        return shares;
+    }
+
+    static recoverSecret(shares) {
+        if (shares.length < 2) {
+            throw new Error('At least 2 shares required for recovery');
+        }
+        if (new Set(shares.map((share) => share[0])).size !== shares.length) {
+            throw new Error('Duplicate shares are not allowed for recovery');
+        }
+
+        const secretLength = shares[0].length - 1;
+        const secret = Buffer.alloc(secretLength);
+
+        for (let j = 0; j < secretLength; j++) {
+            const xVals = shares.map((s) => s[0]);
+            const yVals = shares.map((s) => s[j + 1]);
+
+            let result = 0;
+            for (let i = 0; i < shares.length; i++) {
+                let num = 1;
+                let den = 1;
+                for (let m = 0; m < shares.length; m++) {
+                    if (m !== i) {
+                        num = this.gfmul(num, xVals[m]);
+                        den = this.gfmul(den, xVals[m] ^ xVals[i]);
+                    }
+                }
+                const li = this.gfdiv(num, den);
+                result ^= this.gfmul(yVals[i], li);
+            }
+
+            secret[j] = result;
+        }
+
+        return secret;
+    }
 }
 
 // =========================
@@ -79,6 +185,34 @@ class TerminalColors {
     static CYAN = '\x1b[96m';
     static MAGENTA = '\x1b[95m';
     static WHITE = '\x1b[97m';
+}
+
+let nonTtyPasswordLinesPromise = null;
+let nonTtyPasswordLineIndex = 0;
+
+function readNonTtyPasswordLine() {
+    if (!nonTtyPasswordLinesPromise) {
+        nonTtyPasswordLinesPromise = new Promise((resolve, reject) => {
+            let data = '';
+            process.stdin.setEncoding('utf8');
+            process.stdin.on('data', (chunk) => {
+                data += chunk;
+            });
+            process.stdin.on('end', () => {
+                resolve(data.split(/\r?\n/));
+            });
+            process.stdin.on('error', reject);
+        });
+    }
+
+    return nonTtyPasswordLinesPromise.then((lines) => {
+        if (nonTtyPasswordLineIndex >= lines.length) {
+            return '';
+        }
+        const line = lines[nonTtyPasswordLineIndex];
+        nonTtyPasswordLineIndex += 1;
+        return line.trim();
+    });
 }
 
 class ConsoleLogger {
@@ -452,6 +586,40 @@ function parseHiddenContainerFooterFromPath(inputPath) {
         hiddenLen,
         fileSize
     };
+}
+
+function inspectThresholdRequirementsFromPath(inputPath) {
+    if (!fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
+        return null;
+    }
+
+    const fd = fs.openSync(inputPath, 'r');
+    try {
+        const prefix = Buffer.alloc(Config.FIXED_HEADER_SIZE);
+        const bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0);
+        if (bytesRead < Config.FIXED_HEADER_SIZE || !prefix.subarray(0, 4).equals(Config.MAGIC)) {
+            return null;
+        }
+
+        const metadata = parseFormatFromBuffer(prefix, { textPayload: false });
+        if (metadata.isLegacy || !(metadata.flags & Config.FLAG_THRESHOLD)) {
+            return null;
+        }
+
+        const shareCountsOffset = metadata.headerLen + metadata.saltLen + metadata.nonceLen;
+        const shareCounts = Buffer.alloc(2);
+        const shareBytesRead = fs.readSync(fd, shareCounts, 0, 2, shareCountsOffset);
+        if (shareBytesRead !== 2) {
+            throw new Error('Threshold metadata is incomplete');
+        }
+
+        return {
+            numPasswords: shareCounts[0],
+            threshold: shareCounts[1]
+        };
+    } finally {
+        fs.closeSync(fd);
+    }
 }
 
 // =========================
@@ -931,7 +1099,7 @@ class CryptoEngine {
             const masterKey = crypto.randomBytes(Config.KEY_SIZE);
             ConsoleLogger.show('debug', 'Generated master key for threshold encryption');
 
-            const shares = Shamir.generateShares(masterKey, numPasswords, threshold);
+            const shares = ShamirSecretSharing.generateShares(masterKey, numPasswords, threshold);
             ConsoleLogger.show('debug', `Generated ${numPasswords} shares using Shamir's Secret Sharing`);
 
             const fileSize = fs.statSync(inputPath).size;
@@ -1150,7 +1318,7 @@ class CryptoEngine {
         }
 
         try {
-            const masterKey = Shamir.recoverSecret(shareDataList.slice(0, threshold));
+            const masterKey = ShamirSecretSharing.recoverSecret(shareDataList.slice(0, threshold));
             ConsoleLogger.show('debug', 'Successfully reconstructed master key');
             return masterKey;
         } catch (err) {
@@ -1277,18 +1445,9 @@ function getpassWithStrength(prompt = 'Enter Password: ') {
 
     // Check if stdin supports raw mode (TTY)
     if (!process.stdin.isTTY) {
-        // Non-TTY: fall back to simple line input
-        return new Promise((resolve) => {
-            const rl = readline.createInterface({
-                input: process.stdin,
-                terminal: false
-            });
-
-            rl.on('line', (line) => {
-                process.stdout.write('\x1b[?25h\n');
-                rl.close();
-                resolve(line.trim());
-            });
+        return readNonTtyPasswordLine().then((line) => {
+            process.stdout.write('\x1b[?25h\n');
+            return line;
         });
     }
 
@@ -1454,16 +1613,8 @@ async function getpassVerifyWithStrength(prompt1 = 'Enter Password: ', prompt2 =
 // =========================
 
 async function getThresholdPasswords(numPasswords, threshold, providedPasswords) {
-    if (providedPasswords && providedPasswords.length > 0) {
-        if (providedPasswords.length < threshold) {
-            ConsoleLogger.show('error', `Need at least ${threshold} passwords for threshold mode, but only ${providedPasswords.length} provided`);
-            process.exit(1);
-        }
-        return providedPasswords;
-    }
-
-    const passwords = [];
-    for (let i = 0; i < numPasswords; i++) {
+    const passwords = providedPasswords ? [...providedPasswords] : [];
+    for (let i = passwords.length; i < numPasswords; i++) {
         const pw = await getpassWithStrength(`Enter password ${i + 1}/${numPasswords}: `);
         if (!pw) {
             ConsoleLogger.show('error', 'Password cannot be empty');
@@ -1794,6 +1945,24 @@ async function main() {
 
     let pwOuter = options.passwordOuter;
     let pwHidden = options.passwordHidden;
+    let thresholdRequirements = null;
+
+    if (
+        options.decrypt &&
+        options.file &&
+        !options.inspect &&
+        !options.hidden &&
+        !options.hiddenVol &&
+        !hasWildcard(options.file) &&
+        fs.existsSync(options.file) &&
+        fs.statSync(options.file).isFile()
+    ) {
+        try {
+            thresholdRequirements = inspectThresholdRequirementsFromPath(options.file);
+        } catch (err) {
+            ConsoleLogger.show('debug', `Could not inspect threshold requirements: ${err.message}`);
+        }
+    }
 
     // Secure Password Input with Strength Indicator
     if (!options.inspect && options.hiddenVol) {
@@ -1815,6 +1984,14 @@ async function main() {
         } else {
             ConsoleLogger.show('debug', 'Hidden password provided via command line');
         }
+    } else if (!options.inspect && thresholdRequirements && (!options.password || options.password.length < thresholdRequirements.threshold)) {
+        const providedPasswords = options.password || [];
+        ConsoleLogger.show('info', `Threshold-encrypted file detected: ${thresholdRequirements.threshold} password(s) required`);
+        options.password = await getThresholdPasswords(
+            thresholdRequirements.threshold,
+            thresholdRequirements.threshold,
+            providedPasswords
+        );
     } else if (!options.inspect && (!options.password || options.password.length === 0)) {
         if (options.decrypt && options.hidden && options.passwordHidden !== undefined) {
             options.password = options.passwordHidden;

@@ -95,6 +95,26 @@ test('threshold decrypt accepts repeated password when distinct shares use the s
   assert.equal(fs.readFileSync(decFile, 'utf8'), 'threshold duplicate password content');
 });
 
+test('threshold decrypt without -p prompts for the required number of passwords', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-threshold-prompt-'));
+  const infile = path.join(tmp, 'README.md');
+  fs.writeFileSync(infile, 'threshold prompt content', 'utf8');
+
+  const enc = runCLI(['-f', infile, '-p', 'alpha', '-p', 'beta', '-p', 'gamma', '--threshold', '2']);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+
+  const encFile = infile + '.enc';
+  const dec = runCLI(['-d', '-f', encFile], { input: 'alpha\nbeta\n' });
+  assert.equal(dec.code, 0, dec.stdout + dec.stderr);
+  assert.match(dec.stdout, /Threshold-encrypted file detected: 2 password\(s\) required/);
+  assert.match(dec.stdout, /Enter password 1\/2:/);
+  assert.match(dec.stdout, /Enter password 2\/2:/);
+
+  const decFile = path.join(tmp, 'README.md.dec');
+  assert.ok(fs.existsSync(decFile));
+  assert.equal(fs.readFileSync(decFile, 'utf8'), 'threshold prompt content');
+});
+
 test('encrypts and decrypts file', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));
   const infile = path.join(tmp, 'a.txt');
@@ -657,7 +677,6 @@ test('inspect shows argon2 kdf', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
-
 
 
 

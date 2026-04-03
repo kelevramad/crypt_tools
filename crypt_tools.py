@@ -20,8 +20,6 @@ import tempfile
 from enum import StrEnum
 from typing import Optional, List
 
-from shamir import ShamirSecretSharing
-
 # Third-party imports
 try:
 	from tqdm import tqdm
@@ -47,6 +45,98 @@ def ensure_utf8(stream):
 
 sys.stdout = ensure_utf8(sys.stdout)
 sys.stderr = ensure_utf8(sys.stderr)
+
+# =========================
+# Shamir's Secret Sharing
+# =========================
+
+
+def gf256_mul(a, b):
+	result = 0
+	while b:
+		if b & 1:
+			result ^= a
+		a = (a << 1) ^ (0x11B if a & 0x80 else 0)
+		b >>= 1
+	return result & 0xFF
+
+
+def gf256_exp(base, exp):
+	result = 1
+	for _ in range(exp):
+		result = gf256_mul(result, base)
+	return result
+
+
+def gf256_inv(a):
+	if a == 0:
+		return 0
+	return gf256_exp(a, 254)
+
+
+def gf256_div(a, b):
+	if b == 0:
+		raise ValueError('Division by zero')
+	return gf256_mul(a, gf256_inv(b))
+
+
+class ShamirSecretSharing:
+	@classmethod
+	def generate_shares(cls, secret, num_shares, threshold):
+		if threshold > num_shares:
+			raise ValueError('Threshold cannot exceed number of shares')
+		if threshold < 2:
+			raise ValueError('Threshold must be at least 2')
+		if len(secret) == 0:
+			raise ValueError('Secret cannot be empty')
+
+		coeffs = [os.urandom(1)[0] for _ in range(threshold - 1)]
+
+		shares = []
+		for i in range(num_shares):
+			share = bytearray(len(secret) + 1)
+			share[0] = i + 1
+			x = i + 1
+
+			for j in range(len(secret)):
+				y = secret[j]
+				for deg in range(1, threshold):
+					y ^= gf256_mul(coeffs[deg - 1], gf256_exp(x, deg))
+				share[j + 1] = y
+
+			shares.append(bytes(share))
+
+		return shares
+
+	@classmethod
+	def recover_secret(cls, shares):
+		if len(shares) < 2:
+			raise ValueError('At least 2 shares required for recovery')
+		if len({share[0] for share in shares}) != len(shares):
+			raise ValueError('Duplicate shares are not allowed for recovery')
+
+		secret_length = len(shares[0]) - 1
+		secret = bytearray(secret_length)
+
+		for j in range(secret_length):
+			x_vals = [s[0] for s in shares]
+			y_vals = [s[j + 1] for s in shares]
+
+			result = 0
+			for i in range(len(shares)):
+				num = 1
+				den = 1
+				for m in range(len(shares)):
+					if m != i:
+						num = gf256_mul(num, x_vals[m])
+						den = gf256_mul(den, x_vals[m] ^ x_vals[i])
+				li = gf256_div(num, den)
+				result ^= gf256_mul(y_vals[i], li)
+
+			secret[j] = result
+
+		return bytes(secret)
+
 
 # =========================
 # Configuration
@@ -401,6 +491,33 @@ def parse_hidden_container_footer_from_path(path: str) -> Optional[dict]:
 		'hiddenLen': hidden_len,
 		'fileSize': file_size,
 	}
+
+
+def inspect_threshold_requirements_from_path(path: str) -> Optional[dict]:
+	"""Return threshold metadata for a CT02 threshold-encrypted file, or None."""
+	if not os.path.isfile(path):
+		return None
+
+	with open(path, 'rb') as fin:
+		prefix = fin.read(Config.FIXED_HEADER_SIZE)
+
+	if len(prefix) < Config.FIXED_HEADER_SIZE or prefix[:4] != Config.MAGIC:
+		return None
+
+	metadata = _parse_format_from_bytes(prefix, text_payload=False)
+	if metadata['is_legacy'] or not (metadata['flags'] & Config.FLAG_THRESHOLD):
+		return None
+
+	share_counts_offset = metadata['header_len'] + metadata['salt_len'] + metadata['nonce_len']
+
+	with open(path, 'rb') as fin:
+		fin.seek(share_counts_offset)
+		num_and_thresh = fin.read(2)
+
+	if len(num_and_thresh) != 2:
+		raise ValueError('Threshold metadata is incomplete')
+
+	return {'num_passwords': num_and_thresh[0], 'threshold': num_and_thresh[1]}
 
 
 # =========================
@@ -2243,6 +2360,21 @@ def main(argv=None):
 
 	pw_outer = args.password_outer
 	pw_hidden = args.password_hidden
+	threshold_requirements = None
+
+	if (
+		args.decrypt
+		and args.file
+		and not args.inspect
+		and not args.hidden
+		and not args.hidden_vol
+		and not glob.has_magic(args.file)
+		and os.path.isfile(args.file)
+	):
+		try:
+			threshold_requirements = inspect_threshold_requirements_from_path(args.file)
+		except Exception as e:
+			ConsoleLogger.show('debug', f'Could not inspect threshold requirements: {e}')
 
 	# Secure Password Input with Strength Indicator
 	# Only prompt for password if not provided (None), not if empty string was explicitly passed
@@ -2263,6 +2395,18 @@ def main(argv=None):
 			ConsoleLogger.show('info', 'Hidden volume password entered', icon='🔑')
 		else:
 			ConsoleLogger.show('debug', 'Hidden password provided via command line')
+	elif threshold_requirements and len(args.password) < threshold_requirements['threshold']:
+		num_passwords_needed = threshold_requirements['threshold']
+		ConsoleLogger.show(
+			'info',
+			f'Threshold-encrypted file detected: {num_passwords_needed} password(s) required',
+		)
+		for i in range(len(args.password), num_passwords_needed):
+			pw = getpass_with_strength(f'Enter password {i + 1}/{num_passwords_needed}: ')
+			if not pw:
+				ConsoleLogger.show('error', 'Password cannot be empty')
+				sys.exit(1)
+			args.password.append(pw)
 	elif args.threshold:
 		num_passwords_needed = args.threshold
 		if len(args.password) < num_passwords_needed:

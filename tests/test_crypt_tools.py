@@ -8,11 +8,11 @@ import runpy
 import types
 import sys
 import builtins
-from shamir import ShamirSecretSharing
 from crypt_tools import (
 	CryptoEngine,
 	Config,
 	ConsoleLogger,
+	ShamirSecretSharing,
 	TerminalColors,
 	main,
 	parse_hidden_container_footer_from_path,
@@ -409,6 +409,40 @@ def test_cli_decrypt_allows_multiple_passwords_without_threshold(capsys):
 	assert excinfo.value.code == 1
 	captured = capsys.readouterr()
 	assert 'Multiple -p/--password values require --threshold' not in captured.out
+
+
+def test_cli_decrypt_threshold_file_prompts_required_password_count(monkeypatch, capsys, engine):
+	"""Threshold decrypt should prompt for the file's required password count."""
+	passwords = ['alpha', 'beta', 'gamma']
+	prompted = []
+
+	with tempfile.TemporaryDirectory() as tmpdir:
+		input_path = os.path.join(tmpdir, 'threshold.txt')
+		enc_path = input_path + '.enc'
+		dec_path = input_path + '.dec'
+
+		with open(input_path, 'w', encoding='utf-8') as f:
+			f.write('threshold prompt test')
+
+		assert engine.encrypt_with_threshold(input_path, enc_path, passwords, 2)
+
+		answers = iter(passwords[:2])
+
+		def fake_getpass(prompt=''):
+			prompted.append(prompt)
+			return next(answers)
+
+		monkeypatch.setattr(crypt_tools, 'getpass_with_strength', fake_getpass)
+
+		main(['--decrypt', '-f', enc_path])
+
+		assert os.path.exists(dec_path)
+		with open(dec_path, 'r', encoding='utf-8') as f:
+			assert f.read() == 'threshold prompt test'
+
+	assert prompted == ['Enter password 1/2: ', 'Enter password 2/2: ']
+	captured = capsys.readouterr()
+	assert 'Threshold-encrypted file detected: 2 password(s) required' in captured.out
 
 
 def test_recursive_directory(engine):
