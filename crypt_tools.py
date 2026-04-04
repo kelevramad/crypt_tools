@@ -239,8 +239,20 @@ def render_qr_code(data: str) -> str:
 	qr.make(fit=True)
 	matrix = qr.get_matrix()
 	lines = []
-	for row in matrix:
-		lines.append(''.join('██' if cell else '  ' for cell in row))
+	for row_index in range(0, len(matrix), 2):
+		top_row = matrix[row_index]
+		bottom_row = matrix[row_index + 1] if row_index + 1 < len(matrix) else [False] * len(top_row)
+		line = []
+		for top_cell, bottom_cell in zip(top_row, bottom_row):
+			if top_cell and bottom_cell:
+				line.append('█')
+			elif top_cell:
+				line.append('▀')
+			elif bottom_cell:
+				line.append('▄')
+			else:
+				line.append(' ')
+		lines.append(''.join(line).rstrip())
 	return '\n'.join(lines)
 
 

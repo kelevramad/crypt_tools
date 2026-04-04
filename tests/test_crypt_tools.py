@@ -520,6 +520,32 @@ def test_cli_encrypt_text_with_qr(monkeypatch, capsys):
 	assert rendered['data']
 
 
+def test_render_qr_code_uses_compact_terminal_blocks(monkeypatch):
+	"""QR rendering should use a compact half-block terminal representation."""
+	class DummyQRCode:
+		def __init__(self, border):
+			assert border == 1
+			self.data = None
+
+		def add_data(self, data):
+			self.data = data
+
+		def make(self, fit):
+			assert fit is True
+
+		def get_matrix(self):
+			return [
+				[True, False, True],
+				[False, True, False],
+			]
+
+	monkeypatch.setattr(crypt_tools.qrcode, 'QRCode', DummyQRCode)
+
+	rendered = crypt_tools.render_qr_code('hello')
+
+	assert rendered == '▀▄▀'
+
+
 def test_cli_qr_requires_text_encrypt(capsys):
 	"""QR mode should reject decrypt/file workflows."""
 	with pytest.raises(SystemExit) as excinfo:
