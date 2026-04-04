@@ -31,12 +31,12 @@ VSVersionInfo(
         '040904B0',
         [StringStruct('CompanyName', 'Center For Cyber Intelligence'),
         StringStruct('FileDescription', 'Crypt Tools (AES-GCM Edition)'),
-        StringStruct('FileVersion', '2.5.0'),
+        StringStruct('FileVersion', '2.6.0'),
         StringStruct('InternalName', 'crypt_tools'),
         StringStruct('LegalCopyright', 'Copyright (c) Center For Cyber Intelligence'),
         StringStruct('OriginalFilename', 'crypt_tools.exe'),
         StringStruct('ProductName', 'Crypt Tools'),
-        StringStruct('ProductVersion', '2.5.0')])
+        StringStruct('ProductVersion', '2.6.0')])
       ]), 
     VarFileInfo([VarStruct('Translation', [1033, 1200])])
   ]

@@ -3,6 +3,7 @@ import pytest
 import tempfile
 import base64
 import json
+import re
 import crypt_tools
 import io
 import runpy
@@ -1375,9 +1376,12 @@ def test_file_not_found_end_branch(monkeypatch):
 
 	monkeypatch.setattr(crypt_tools.ConsoleLogger, 'show', fake_show)
 	monkeypatch.setattr(os.path, 'getsize', lambda p: 1)
-	monkeypatch.setattr(sys, 'exit', lambda code=0: None)
-	main(['--encrypt', '-f', '*.nomatch', '-p', password])
-	assert any('File not found' in m for m in messages)
+	with pytest.raises(SystemExit) as excinfo:
+		main(['--encrypt', '-f', '*.nomatch', '-p', password])
+
+	assert excinfo.value.code == 1
+	assert any('No files matched pattern' in m for m in messages)
+	assert any('Session ended at' in m for m in messages)
 
 
 def test_encrypt_file_exception_cleanup(monkeypatch, tmp_path):
@@ -1500,22 +1504,36 @@ def test_decrypt_file_error_handling(engine, monkeypatch):
 def test_generate_keyfile(tmp_path):
 	from crypt_tools import generate_keyfile
 
-	keyfile_path = tmp_path / 'test_key.bin'
+	keyfile_path = tmp_path / 'test_key.txt'
 	result = generate_keyfile(str(keyfile_path))
 	assert result is True
 	assert keyfile_path.exists()
-	assert keyfile_path.stat().st_size == 32  # 256 bits = 32 bytes
+	content = keyfile_path.read_text(encoding='utf-8').strip()
+	assert re.fullmatch(r'[A-Za-z0-9_-]+', content)
+	assert len(content) == 22
 
 
 def test_read_keyfile(tmp_path):
 	from crypt_tools import read_keyfile, generate_keyfile
 
 	# Generate a keyfile
-	keyfile_path = tmp_path / 'test_key.bin'
+	keyfile_path = tmp_path / 'test_key.txt'
 	generate_keyfile(str(keyfile_path))
 
 	# Read it back
 	key_data = read_keyfile(str(keyfile_path))
+	assert key_data is not None
+	assert len(key_data) == 16
+
+
+def test_read_keyfile_supports_binary_legacy_format(tmp_path):
+	from crypt_tools import read_keyfile
+
+	keyfile_path = tmp_path / 'legacy_key.bin'
+	keyfile_path.write_bytes(os.urandom(32))
+
+	key_data = read_keyfile(str(keyfile_path))
+
 	assert key_data is not None
 	assert len(key_data) == 32
 
@@ -1652,11 +1670,13 @@ def test_encrypt_data_with_keyfile():
 
 
 def test_cli_generate_keyfile(tmp_path):
-	keyfile_path = tmp_path / 'new_key.bin'
+	keyfile_path = tmp_path / 'new_key.txt'
 	with pytest.raises(SystemExit):
 		main(['--generate-keyfile', str(keyfile_path)])
 	assert keyfile_path.exists()
-	assert keyfile_path.stat().st_size == 32
+	content = keyfile_path.read_text(encoding='utf-8').strip()
+	assert re.fullmatch(r'[A-Za-z0-9_-]+', content)
+	assert len(content) == 22
 
 
 def test_cli_encrypt_with_keyfile(tmp_path):
@@ -1717,6 +1737,66 @@ def test_cli_decrypt_with_keyfile(tmp_path):
 
 	assert decrypted_file.exists()
 	assert decrypted_file.read_text() == 'Test content for decrypt'
+
+
+def test_cli_file_decrypt_failure_avoids_generic_duplicate_message(tmp_path, capsys):
+	from crypt_tools import CryptoEngine
+
+	input_file = tmp_path / 'plain.txt'
+	encrypted_file = tmp_path / 'plain.txt.enc'
+
+	input_file.write_text('secret content')
+	engine = CryptoEngine()
+	engine.encrypt_file(str(input_file), str(encrypted_file), 'correct-password')
+
+	with pytest.raises(SystemExit) as excinfo:
+		main(['--decrypt', '-f', str(encrypted_file), '-p', 'wrong-password'])
+
+	assert excinfo.value.code == 1
+	captured = capsys.readouterr()
+	assert 'Decryption failed for:' in captured.out
+	assert '[❌] Decryption failed\n' not in captured.out
+	assert 'Session ended at ' in captured.out
+
+
+def test_cli_missing_keyfile_avoids_duplicate_read_error(capsys):
+	with pytest.raises(SystemExit) as excinfo:
+		main(['--encrypt', '-t', 'hello', '-p', 'pw', '--keyfile', '.\\missing-key.txt'])
+
+	assert excinfo.value.code == 1
+	captured = capsys.readouterr()
+	assert 'Failed to read key file: Key file not found:' in captured.out
+	assert '[❌] Failed to read key file\n' not in captured.out
+	assert 'Operation aborted: Could not load key file' in captured.out
+	assert 'Session ended at ' in captured.out
+
+
+def test_cli_missing_runtime_keyfile_still_shows_session_end(tmp_path, capsys):
+	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
+
+	keyfile_path = tmp_path / 'key.txt'
+	input_file = tmp_path / 'plain.txt'
+	encrypted_file = tmp_path / 'plain.txt.enc'
+
+	generate_keyfile(str(keyfile_path))
+	input_file.write_text('needs keyfile')
+	engine = CryptoEngine()
+	engine.encrypt_file(
+		str(input_file),
+		str(encrypted_file),
+		'pw',
+		False,
+		read_keyfile(str(keyfile_path)),
+	)
+
+	with pytest.raises(SystemExit) as excinfo:
+		main(['--decrypt', '-f', str(encrypted_file), '-p', 'pw'])
+
+	assert excinfo.value.code == 1
+	captured = capsys.readouterr()
+	assert 'Encrypted with key file but none provided.' in captured.out
+	assert 'Decryption failed for:' in captured.out
+	assert 'Session ended at ' in captured.out
 
 
 def test_inspect_file_shows_keyfile(tmp_path):

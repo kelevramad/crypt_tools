@@ -1,6 +1,6 @@
 {
   "name": "crypt-tools",
-  "version": "2.5.0",
+  "version": "2.6.0",
   "description": "Cryptographic Tool for File and Text Encryption/Decryption (AES-GCM Edition)",
   "main": "crypt_tools.js",
   "bin": {

@@ -225,19 +225,19 @@ node crypt_tools.js --decrypt --select -f .\\documents -p "your_password"
 Generate and use key files for two-factor encryption (password + key file):
 ```bash
 # Generate a random 32-byte key file
-node crypt_tools.js --generate-keyfile mykey.bin
+node crypt_tools.js --generate-keyfile mykey.txt
 
 # Encrypt with key file only (no password)
-node crypt_tools.js --encrypt -f document.txt --keyfile mykey.bin -p ""
+node crypt_tools.js --encrypt -f document.txt --keyfile mykey.txt -p ""
 
 # Encrypt with password AND key file (two-factor authentication)
-node crypt_tools.js --encrypt -f document.txt -p "your_password" --keyfile mykey.bin
+node crypt_tools.js --encrypt -f document.txt -p "your_password" --keyfile mykey.txt
 
 # Decrypt with key file
-node crypt_tools.js --decrypt -f document.enc --keyfile mykey.bin -p "your_password"
+node crypt_tools.js --decrypt -f document.enc --keyfile mykey.txt -p "your_password"
 
 # Encrypt text with key file
-node crypt_tools.js --encrypt -t "Secret message" -p "password" --keyfile mykey.bin
+node crypt_tools.js --encrypt -t "Secret message" -p "password" --keyfile mykey.txt
 
 # Encrypt with Argon2 (more secure, recommended)
 node crypt_tools.js --encrypt -f document.txt -p "your_password" --kdf argon2
@@ -277,7 +277,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 | `--encrypt` | `-e` | Encrypt mode (default) |
 | `--decrypt` | `-d` | Decrypt mode |
 | `--inspect` | — | Inspect encrypted file metadata |
-| `--generate-keyfile` | — | Generate a random key file (32 bytes) |
+| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key |
 | `--text` | `-t` | Text to process |
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |
@@ -316,6 +316,12 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 - Log file accumulates entries; manual cleanup may be required
 - `--output` is only honored when processing a single file (patterns/multiple files ignore custom output)
 
+### Recovery Keys
+- `--generate-keyfile` now creates a text recovery key instead of a raw binary blob.
+- The generated format is a URL-safe Base64 string similar to a MEGA recovery key.
+- `--keyfile` accepts both the new textual recovery-key format and older binary key files for backward compatibility.
+- If a session starts, the CLI now prints both `Session started` and `Session ended`, including failure paths.
+
 ### Format Compatibility
 - New encrypted files use the versioned `CT02` format.
 - `CT02` stores compression and PBKDF2 metadata in the file header.
@@ -324,7 +330,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 
 ## Technical Details
 
-### Version 2.5.0 Specifications
+### Version 2.6.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -427,4 +433,4 @@ ncc build crypt_tools.js -o dist
 ---
 
 **Author**: Center For Cyber Intelligence
-**Version**: 2.5.0
+**Version**: 2.6.0

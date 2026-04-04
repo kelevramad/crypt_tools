@@ -228,19 +228,19 @@ uv run crypt_tools.py --decrypt --select -f .\\documents -p "your_password"
 Generate and use key files for two-factor encryption (password + key file):
 ```bash
 # Generate a random 32-byte key file
-uv run crypt_tools.py --generate-keyfile mykey.bin
+uv run crypt_tools.py --generate-keyfile mykey.txt
 
 # Encrypt with key file only (no password)
-uv run crypt_tools.py --encrypt -f document.txt --keyfile mykey.bin -p ""
+uv run crypt_tools.py --encrypt -f document.txt --keyfile mykey.txt -p ""
 
 # Encrypt with password AND key file (two-factor authentication)
-uv run crypt_tools.py --encrypt -f document.txt -p "your_password" --keyfile mykey.bin
+uv run crypt_tools.py --encrypt -f document.txt -p "your_password" --keyfile mykey.txt
 
 # Decrypt with key file
-uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.bin -p "your_password"
+uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.txt -p "your_password"
 
 # Encrypt text with key file
-uv run crypt_tools.py --encrypt -t "Secret message" -p "password" --keyfile mykey.bin
+uv run crypt_tools.py --encrypt -t "Secret message" -p "password" --keyfile mykey.txt
 
 # Encrypt with Argon2 (more secure, recommended)
 uv run crypt_tools.py --encrypt -f document.txt -p "your_password" --kdf argon2
@@ -294,7 +294,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 | `--encrypt` | `-e` | Encrypt mode (default) |
 | `--decrypt` | `-d` | Decrypt mode |
 | `--inspect` | — | Inspect encrypted file metadata |
-| `--generate-keyfile` | — | Generate a random key file (32 bytes) |
+| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key |
 | `--text` | `-t` | Text to process |
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |
@@ -333,6 +333,12 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 - Log file accumulates entries; manual cleanup may be required
 - `--output` is only honored when processing a single file (patterns/multiple files ignore custom output)
 
+### Recovery Keys
+- `--generate-keyfile` now creates a text recovery key, not a raw binary blob.
+- The generated format is a URL-safe Base64 string similar to MEGA recovery keys.
+- `--keyfile` accepts both the new textual recovery-key format and older binary key files for backward compatibility.
+- If a session starts, the CLI now prints both `Session started` and `Session ended`, including failure paths.
+
 ### Format Compatibility
 - New encrypted files use the versioned `CT02` format.
 - `CT02` stores compression and PBKDF2 metadata in the file header.
@@ -341,7 +347,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.5.0 Specifications
+### Version 2.6.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -426,7 +432,7 @@ You can compile `crypt_tools.py` into a standalone executable file (.exe) using 
 If you are using `uv`, you can run PyInstaller in a temporary environment with all required dependencies:
 
 ```bash
-uvx --with pycryptodome --with tqdm pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
+uvx --with pycryptodome --with tqdm --with qrcode --with blessed pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
 ```
 
 ### Using `pipx`
@@ -462,4 +468,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.5.0
+**Version**: 2.6.0

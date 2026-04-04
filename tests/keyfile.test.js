@@ -37,10 +37,11 @@ test('generates key file', () => {
     const keyPath = path.join(tmp, 'my.key');
     const res = runCLI(['--generate-keyfile', keyPath]);
     assert.equal(res.code, 0);
-    assert.match(res.stdout, /Key file generated/);
+    assert.match(res.stdout, /Recovery key file generated/);
     assert.ok(fs.existsSync(keyPath));
-    const stats = fs.statSync(keyPath);
-    assert.equal(stats.size, 32); // Default key size is 32 bytes
+    const recoveryKey = fs.readFileSync(keyPath, 'utf8').trim();
+    assert.match(recoveryKey, /^[A-Za-z0-9_-]+$/);
+    assert.equal(recoveryKey.length, 22);
 });
 
 test('encrypts and decrypts text with key file', () => {

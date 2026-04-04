@@ -6,6 +6,7 @@ Refactored version with AES-GCM and Streaming I/O.
 
 import argparse
 import base64
+import binascii
 import hashlib
 import json
 import os
@@ -163,7 +164,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.5.0'
+	VERSION = '2.6.0'
 
 	# File format
 	MAGIC = b'CT02'
@@ -969,13 +970,14 @@ def _inspect_ct02_blob_from_path(input_path: str, *, blob_start: int = 0, blob_s
 # =========================
 
 
-def generate_keyfile(output_path: str, key_size: int = Config.KEY_SIZE) -> bool:
-	"""Generate a random key file securely."""
+def generate_keyfile(output_path: str, key_size: int = 16) -> bool:
+	"""Generate a MEGA-style textual recovery key securely."""
 	try:
 		key = os.urandom(key_size)
-		with open(output_path, 'wb') as f:
-			f.write(key)
-		ConsoleLogger.show('success', f'Key file generated: {output_path}')
+		recovery_key = base64.urlsafe_b64encode(key).decode('ascii').rstrip('=')
+		with open(output_path, 'w', encoding='utf-8', newline='\n') as f:
+			f.write(f'{recovery_key}\n')
+		ConsoleLogger.show('success', f'Recovery key file generated: {output_path}')
 		ConsoleLogger.show('info', f'Key size: {key_size} bytes ({key_size * 8} bits)')
 		return True
 	except Exception as e:
@@ -984,20 +986,35 @@ def generate_keyfile(output_path: str, key_size: int = Config.KEY_SIZE) -> bool:
 
 
 def read_keyfile(keyfile_path: str) -> Optional[bytes]:
-	"""Read and validate a key file."""
+	"""Read and validate a key file or textual recovery key."""
 	try:
 		if not os.path.exists(keyfile_path):
 			raise FileNotFoundError(f'Key file not found: {keyfile_path}')
 
-		file_size = os.path.getsize(keyfile_path)
-		if file_size < 16:
-			raise ValueError(f'Key file too small: {file_size} bytes (minimum 16)')
-
-		if file_size > 1024:
-			raise ValueError(f'Key file too large: {file_size} bytes (maximum 1024)')
-
 		with open(keyfile_path, 'rb') as f:
-			key_data = f.read()
+			raw_data = f.read()
+
+		if len(raw_data) > 4096:
+			raise ValueError(f'Key file too large: {len(raw_data)} bytes (maximum 4096)')
+
+		key_data = raw_data
+		try:
+			text_data = raw_data.decode('utf-8').strip()
+			if text_data:
+				if not re.fullmatch(r'[A-Za-z0-9_-]+', text_data):
+					raise ValueError('Recovery key contains invalid characters')
+				padding = '=' * ((4 - len(text_data) % 4) % 4)
+				key_data = base64.b64decode(text_data + padding, altchars=b'-_', validate=True)
+		except UnicodeDecodeError:
+			key_data = raw_data
+		except binascii.Error as e:
+			raise ValueError(f'Invalid recovery key format: {e}') from e
+
+		if len(key_data) < 16:
+			raise ValueError(f'Key file too small: {len(key_data)} bytes (minimum 16)')
+
+		if len(key_data) > 1024:
+			raise ValueError(f'Key file too large: {len(key_data)} bytes (maximum 1024)')
 
 		ConsoleLogger.show('debug', f'Read key file: {keyfile_path} ({len(key_data)} bytes)')
 		return key_data
@@ -2466,7 +2483,7 @@ def _log_completion_summary(
 	if total_ops > 0 and success_count == total_ops:
 		ConsoleLogger.show('success', f'{action} completed successfully', icon='✅')
 	elif success_count == 0:
-		ConsoleLogger.show('error', f'{action} failed', icon='❌')
+		pass
 	else:
 		ConsoleLogger.show('warning', f'{action} completed with failures', icon='⚠️')
 
@@ -2574,6 +2591,21 @@ def main(argv=None):
 	ConsoleLogger.show('info', f'Session started at {start_timestamp}', icon='🕐')
 	if config_path:
 		ConsoleLogger.show('info', f'Config file: {config_path}', icon='⚙️')
+	session_ended = False
+
+	def finish_session():
+		nonlocal session_ended
+		if session_ended:
+			return
+		session_ended = True
+		end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+		ConsoleLogger.show('info', f'Session ended at {end_timestamp}', icon='🏁')
+		if ConsoleLogger.LOG_ENABLED:
+			ConsoleLogger.show('info', '=' * 80, show_console=False, log_file=True)
+
+	def abort(code: int = 1):
+		finish_session()
+		raise SystemExit(code)
 
 	# Enable debug mode if --debug flag is set
 	if args.debug:
@@ -2608,31 +2640,31 @@ def main(argv=None):
 			if not file_list:
 				ConsoleLogger.show('error', f'No files matched pattern: {args.file}')
 				ConsoleLogger.show('error', 'Operation failed: No matching files')
-				sys.exit(1)
+				abort(1)
 		else:
 			file_list = [args.file]
 
 	if args.hidden_vol:
 		if not args.file:
 			ConsoleLogger.show('error', '--hidden-vol requires -f/--file (decoy path)')
-			sys.exit(1)
+			abort(1)
 		if args.recursive:
 			ConsoleLogger.show('error', '--hidden-vol cannot be used with --recursive')
-			sys.exit(1)
+			abort(1)
 		wc = any(ch in args.file for ch in ['*', '?', '[', ']'])
 		if wc or (file_list and len(file_list) != 1):
 			ConsoleLogger.show(
 				'error',
 				'--hidden-vol requires a single decoy file (no wildcards or multi-file batch)',
 			)
-			sys.exit(1)
+			abort(1)
 		decoy_p = file_list[0]
 		if not os.path.isfile(decoy_p):
 			ConsoleLogger.show('error', 'Decoy path must be a regular file for --hidden-vol')
-			sys.exit(1)
+			abort(1)
 		if not os.path.isfile(args.hidden_file):
 			ConsoleLogger.show('error', f'Hidden file not found: {args.hidden_file}')
-			sys.exit(1)
+			abort(1)
 
 	if args.inspect:
 		target_file = (file_list and file_list[0]) if file_list else args.file
@@ -2640,7 +2672,7 @@ def main(argv=None):
 		if not target_file:
 			ConsoleLogger.show('error', 'No file specified for inspection')
 			ConsoleLogger.show('error', 'Operation failed: No file to inspect')
-			sys.exit(1)
+			abort(1)
 
 		details = None
 		try:
@@ -2648,15 +2680,15 @@ def main(argv=None):
 		except FileNotFoundError:
 			ConsoleLogger.show('error', f'File not found: {target_file}')
 			ConsoleLogger.show('error', 'Operation failed: File does not exist')
-			sys.exit(1)
+			abort(1)
 		except ValueError as e:
 			ConsoleLogger.show('error', f'Inspect failed: {e}')
 			ConsoleLogger.show('error', f'File is not a supported encrypted file: {target_file}')
-			sys.exit(1)
+			abort(1)
 		except Exception as e:
 			ConsoleLogger.show('error', f'Inspect failed: {e}')
 			ConsoleLogger.show('error', f'File is not a supported encrypted file: {target_file}')
-			sys.exit(1)
+			abort(1)
 
 		ConsoleLogger.show('info', f'Format: {details["format"]}', icon='🔍')
 		ConsoleLogger.show('info', f'Version: {details["version"]}', icon='📜')
@@ -2749,7 +2781,7 @@ def main(argv=None):
 			if 'supported encrypted file' in str(e):
 				ConsoleLogger.show('error', 'Only CT02 supported encrypted file')
 			ConsoleLogger.show('error', 'Operation failed: Cannot inspect file')
-			sys.exit(1)
+			abort(1)
 
 		target_file = file_list[0]
 		ConsoleLogger.show('info', f'Inspecting file: {target_file}', icon='🔍')
@@ -2771,11 +2803,11 @@ def main(argv=None):
 				f'Ciphertext Size: {engine._format_size(details["ciphertextSize"])}',
 				icon='📋',
 			)
-			sys.exit(0)
+			abort(0)
 		except Exception as e:
 			ConsoleLogger.show('error', f'Inspection failed: {e}')
 			ConsoleLogger.show('error', 'Operation failed: Cannot inspect file')
-			sys.exit(1)
+			abort(1)
 
 	if args.text:
 		mode_str = 'decrypt' if args.decrypt else 'encrypt'
@@ -2794,7 +2826,7 @@ def main(argv=None):
 			ConsoleLogger.show('error', f'File not found: {args.file}')
 			ConsoleLogger.show('error', 'Operation failed: File does not exist')
 			ConsoleLogger.show('error', 'Please check the file path and try again')
-			sys.exit(1)
+			abort(1)
 
 		is_dir = os.path.isdir(args.file)
 		if is_dir and not args.recursive:
@@ -2804,7 +2836,7 @@ def main(argv=None):
 			ConsoleLogger.show(
 				'error', 'Operation aborted: Directory specified without --recursive flag'
 			)
-			sys.exit(1)
+			abort(1)
 
 		mode_str = 'decrypt' if args.decrypt else 'encrypt'
 		compression_str = 'enabled' if args.compress else 'disabled'
@@ -2848,9 +2880,8 @@ def main(argv=None):
 		ConsoleLogger.show('info', f'Using key file: {args.keyfile}', icon='🔐')
 		keyfile_data = read_keyfile(args.keyfile)
 		if keyfile_data is None:
-			ConsoleLogger.show('error', 'Failed to read key file')
 			ConsoleLogger.show('error', 'Operation aborted: Could not load key file')
-			sys.exit(1)
+			abort(1)
 		ConsoleLogger.show('success', 'Key file loaded successfully')
 	else:
 		ConsoleLogger.show('debug', 'No key file provided')
@@ -2858,13 +2889,13 @@ def main(argv=None):
 	args.kdf = args.kdf or 'pbkdf2'
 	if args.kdf not in ['pbkdf2', 'argon2']:
 		ConsoleLogger.show('error', 'Invalid --kdf value. Must be "pbkdf2" or "argon2"')
-		sys.exit(1)
+		abort(1)
 	kdf_type = Config.KDF_ARGON2 if args.kdf == 'argon2' else Config.KDF_PBKDF2
 	if args.kdf == 'argon2' and not ARGON2_AVAILABLE:
 		ConsoleLogger.show(
 			'error', 'Argon2 is not available. Please install argon2-cffi: pip install argon2-cffi'
 		)
-		sys.exit(1)
+		abort(1)
 
 	iterations = args.iterations
 	if iterations is None:
@@ -2919,7 +2950,7 @@ def main(argv=None):
 			pw = getpass_with_strength(f'Enter password {i + 1}/{num_passwords_needed}: ')
 			if not pw:
 				ConsoleLogger.show('error', 'Password cannot be empty')
-				sys.exit(1)
+				abort(1)
 			args.password.append(pw)
 	elif args.threshold:
 		num_passwords_needed = args.threshold
@@ -2929,7 +2960,7 @@ def main(argv=None):
 				pw = getpass_with_strength(f'Enter password {i + 1}/{num_passwords_needed}: ')
 				if not pw:
 					ConsoleLogger.show('error', 'Password cannot be empty')
-					sys.exit(1)
+					abort(1)
 				args.password.append(pw)
 		else:
 			ConsoleLogger.show(
@@ -3220,20 +3251,15 @@ def main(argv=None):
 			_log_completion_summary(args.decrypt, success_count, total_ops, elapsed_time)
 
 			if fail_count > 0:
-				sys.exit(1)
+				abort(1)
 		else:
 			ConsoleLogger.show('error', f'File not found: {args.file}')
 			ConsoleLogger.show('error', 'Operation failed: File does not exist')
 			ConsoleLogger.show('error', 'Please check the file path and try again')
-			sys.exit(1)
+			abort(1)
 
 	# Record end time
-	end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
-	ConsoleLogger.show('info', f'Session ended at {end_timestamp}', icon='🏁')
-
-	# Write separator line and end timestamp to log file at the end of session
-	if ConsoleLogger.LOG_ENABLED:
-		ConsoleLogger.show('info', '=' * 80, show_console=False, log_file=True)
+	finish_session()
 
 
 if __name__ == '__main__':

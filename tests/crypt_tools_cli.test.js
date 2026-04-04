@@ -351,6 +351,42 @@ test('decrypt file with wrong password does not create output', () => {
   assert.equal(dec.code, 1);
   const decFile = path.join(path.dirname(infile), path.basename(infile) + '.dec');
   assert.ok(!fs.existsSync(decFile));
+  assert.match(dec.stdout, /Decryption failed for:/);
+  assert.doesNotMatch(dec.stdout, /\[❌\] Decryption failed\s*$/m);
+  assert.match(dec.stdout, /Session ended at /);
+});
+
+test('missing keyfile avoids duplicate read error line', () => {
+  const res = runCLI(['--encrypt', '-t', 'hello', '-p', 'pw', '--keyfile', '.\\missing-key.txt']);
+  assert.equal(res.code, 1);
+  assert.match(res.stdout, /Failed to read key file: Key file not found:/);
+  assert.doesNotMatch(res.stdout, /\[❌\] Failed to read key file\s*$/m);
+  assert.match(res.stdout, /Operation aborted: Could not load key file/);
+  assert.match(res.stdout, /Session ended at /);
+});
+
+test('decrypt without required keyfile still shows session end', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-key-required-'));
+
+  try {
+    const keyPath = path.join(tmp, 'key.txt');
+    const infile = path.join(tmp, 'plain.txt');
+    fs.writeFileSync(infile, 'needs keyfile', 'utf8');
+
+    let res = runCLI(['--generate-keyfile', keyPath], { cwd: tmp });
+    assert.equal(res.code, 0);
+
+    res = runCLI(['-f', infile, '-p', 'pw', '--keyfile', keyPath], { cwd: tmp });
+    assert.equal(res.code, 0, res.stdout + res.stderr);
+
+    const dec = runCLI(['-d', '-f', infile + '.enc', '-p', 'pw'], { cwd: tmp });
+    assert.equal(dec.code, 1);
+    assert.match(dec.stdout, /Encrypted with key file but none provided/);
+    assert.match(dec.stdout, /Decryption failed for:/);
+    assert.match(dec.stdout, /Session ended at /);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
 test('decrypt file too small fails', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));
@@ -622,14 +658,16 @@ test('directory without -r exits with error', () => {
 
 test('generate-keyfile creates key file', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
-  const keyfilePath = path.join(tmpDir, 'test_key.bin');
+  const keyfilePath = path.join(tmpDir, 'test_key.txt');
 
   const result = runCLI(['--generate-keyfile', keyfilePath], { cwd: tmpDir });
 
   try {
     assert.strictEqual(result.code, 0, 'should exit with code 0');
     assert.ok(fs.existsSync(keyfilePath), 'key file should exist');
-    assert.strictEqual(fs.statSync(keyfilePath).size, 32, 'key file should be 32 bytes');
+    const recoveryKey = fs.readFileSync(keyfilePath, 'utf8').trim();
+    assert.match(recoveryKey, /^[A-Za-z0-9_-]+$/);
+    assert.strictEqual(recoveryKey.length, 22, 'recovery key should be 22 chars for 16 bytes');
   } finally {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
@@ -797,13 +835,6 @@ test('inspect shows argon2 kdf', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
-
-
-
-
-
-
-
 
 
 

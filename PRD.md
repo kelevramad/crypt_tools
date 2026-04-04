@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.5.0 |
+| **Version** | 2.6.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -145,7 +145,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--encrypt` | `-e` | Encrypt mode | Yes (default) |
 | `--decrypt` | `-d` | Decrypt mode | No |
 | `--inspect` | — | Inspect encrypted file metadata | No |
-| `--generate-keyfile` | — | Generate a random key file | None |
+| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key | None |
 | `--text` | `-t` | Text to process | None |
 | `--file` | `-f` | Input file/directory path or wildcard pattern (e.g., `*.md`, `tests\\*.pyc`) | Required |
 | `--output` | `-o` | Output file path | Auto-generated |
@@ -220,16 +220,16 @@ uv run crypt_tools.py --encrypt -f "*.md" -p "password"
 uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "password"
 
 # Generate a key file
-uv run crypt_tools.py --generate-keyfile mykey.bin
+uv run crypt_tools.py --generate-keyfile mykey.txt
 
 # Encrypt with key file only (no password)
-uv run crypt_tools.py --encrypt -f document.txt --keyfile mykey.bin -p ""
+uv run crypt_tools.py --encrypt -f document.txt --keyfile mykey.txt -p ""
 
 # Encrypt with password AND key file (two-factor)
-uv run crypt_tools.py --encrypt -f document.txt -p "password" --keyfile mykey.bin
+uv run crypt_tools.py --encrypt -f document.txt -p "password" --keyfile mykey.txt
 
 # Decrypt with key file
-uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.bin -p "password"
+uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.txt -p "password"
 
 # Encrypt with Argon2 (more secure, recommended)
 uv run crypt_tools.py --encrypt -f document.txt -p "password" --kdf argon2
@@ -332,6 +332,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.6.0 | 2026-04-04 | Switched `--generate-keyfile` to emit MEGA-style textual recovery keys, kept backward compatibility with legacy binary key files, compacted Python QR output to match Node more closely, cleaned up duplicate error lines, and ensured session end logging appears on failure paths |
 | 2.5.0 | 2026-04-03 | Added interactive file selection (`--select`) using a terminal UI, QR code output for text encryption (`--qr`), new Python/Node QR and TUI dependencies, and test coverage for the new flows |
 | 2.4.3 | 2026-04-03 | Added grouped/colorized CLI help, expanded `--help` with environment variables and config keys, and normalized release versions across scripts, docs, and package metadata |
 | 2.4.2 | 2026-04-03 | Added configuration-file defaults (`--config`, `.crypt_tools.{conf,json,yml,yaml}`), environment-variable defaults (`CRYPT_TOOLS_*`), README examples, and sample config templates |

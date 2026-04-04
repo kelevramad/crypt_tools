@@ -156,7 +156,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.5.0';
+    static VERSION = '2.6.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -905,7 +905,7 @@ function logCompletionSummary(isDecrypt, successCount, totalOps, elapsedSec) {
     if (totalOps > 0 && successCount === totalOps) {
         ConsoleLogger.show('success', `${action} completed successfully`, '✅');
     } else if (successCount === 0) {
-        ConsoleLogger.show('error', `${action} failed`, '❌');
+        // Specific per-file errors are already shown, so avoid duplicating a generic failure line.
     } else {
         ConsoleLogger.show('warning', `${action} completed with failures`, '⚠️');
     }
@@ -1227,11 +1227,12 @@ function inspectCT02BlobFromPath(inputPath, { blobStart = 0, blobSpan = null } =
 // Key File Functions
 // =========================
 
-function generateKeyfile(outputPath, keySize = Config.KEY_SIZE) {
+function generateKeyfile(outputPath, keySize = 16) {
     try {
         const key = crypto.randomBytes(keySize);
-        fs.writeFileSync(outputPath, key);
-        ConsoleLogger.show('success', `Key file generated: ${outputPath}`);
+        const recoveryKey = key.toString('base64url');
+        fs.writeFileSync(outputPath, `${recoveryKey}\n`, 'utf8');
+        ConsoleLogger.show('success', `Recovery key file generated: ${outputPath}`);
         ConsoleLogger.show('info', `Key size: ${keySize} bytes (${keySize * 8} bits)`);
         return true;
     } catch (err) {
@@ -1246,16 +1247,28 @@ function readKeyfile(keyfilePath) {
             throw new Error(`Key file not found: ${keyfilePath}`);
         }
 
-        const fileSize = fs.statSync(keyfilePath).size;
-        if (fileSize < 16) {
-            throw new Error(`Key file too small: ${fileSize} bytes (minimum 16)`);
+        const rawData = fs.readFileSync(keyfilePath);
+        if (rawData.length > 4096) {
+            throw new Error(`Key file too large: ${rawData.length} bytes (maximum 4096)`);
         }
 
-        if (fileSize > 1024) {
-            throw new Error(`Key file too large: ${fileSize} bytes (maximum 1024)`);
+        let keyData = rawData;
+        const textData = rawData.toString('utf8').trim();
+        if (textData.length > 0) {
+            if (!/^[A-Za-z0-9_-]+$/.test(textData)) {
+                throw new Error('Recovery key contains invalid characters');
+            }
+            keyData = Buffer.from(textData, 'base64url');
         }
 
-        const keyData = fs.readFileSync(keyfilePath);
+        if (keyData.length < 16) {
+            throw new Error(`Key file too small: ${keyData.length} bytes (minimum 16)`);
+        }
+
+        if (keyData.length > 1024) {
+            throw new Error(`Key file too large: ${keyData.length} bytes (maximum 1024)`);
+        }
+
         ConsoleLogger.show('debug', `Read key file: ${keyfilePath} (${keyData.length} bytes)`);
         return keyData;
     } catch (err) {
@@ -2368,6 +2381,22 @@ async function main() {
     if (configPath) {
         ConsoleLogger.show('info', `Config file: ${configPath}`, '⚙️');
     }
+    let sessionEnded = false;
+    function finishSession() {
+        if (sessionEnded) {
+            return;
+        }
+        sessionEnded = true;
+        const endTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        ConsoleLogger.show('info', `Session ended at ${endTimestamp}`, '🏁');
+        if (ConsoleLogger.LOG_ENABLED) {
+            ConsoleLogger.show('info', '='.repeat(80), null, false, true);
+        }
+    }
+    function abort(code = 1) {
+        finishSession();
+        process.exit(code);
+    }
 
     // Enable debug mode if --debug flag is set
     if (options.debug) {
@@ -2391,7 +2420,7 @@ async function main() {
         if (expanded.length === 0 && hasWildcard(options.file)) {
             ConsoleLogger.show('error', `No files matched pattern: ${options.file}`);
             ConsoleLogger.show('error', 'Operation failed: No matching files');
-            process.exit(1);
+            abort(1);
         }
         fileList = expanded;
     }
@@ -2399,29 +2428,29 @@ async function main() {
     if (options.hiddenVol) {
         if (!options.file) {
             ConsoleLogger.show('error', '--hidden-vol requires -f/--file (decoy path)');
-            process.exit(1);
+            abort(1);
         }
         if (options.recursive) {
             ConsoleLogger.show('error', '--hidden-vol cannot be used with --recursive');
-            process.exit(1);
+            abort(1);
         }
         const wc = hasWildcard(options.file);
         if (wc || (fileList && fileList.length !== 1)) {
             ConsoleLogger.show('error', '--hidden-vol requires a single decoy file (no wildcards or multi-file batch)');
-            process.exit(1);
+            abort(1);
         }
         const decoyP = fileList[0];
         if (!fs.existsSync(decoyP)) {
             ConsoleLogger.show('error', `Decoy file not found: ${decoyP}`);
-            process.exit(1);
+            abort(1);
         }
         if (!fs.statSync(decoyP).isFile()) {
             ConsoleLogger.show('error', 'Decoy path must be a regular file for --hidden-vol');
-            process.exit(1);
+            abort(1);
         }
         if (!fs.existsSync(options.hiddenFile) || !fs.statSync(options.hiddenFile).isFile()) {
             ConsoleLogger.show('error', `Hidden file not found or not a file: ${options.hiddenFile}`);
-            process.exit(1);
+            abort(1);
         }
     }
 
@@ -2438,7 +2467,7 @@ async function main() {
                 ConsoleLogger.show('error', `Inspect failed: ${err.message}`);
                 ConsoleLogger.show('error', `File is not a supported encrypted file: ${target}`);
             }
-            process.exit(1);
+            abort(1);
         }
 
         ConsoleLogger.show('info', `Format: ${details.format}`, '🔍');
@@ -2498,7 +2527,7 @@ async function main() {
             ConsoleLogger.show('error', `File not found: ${options.file}`);
             ConsoleLogger.show('error', 'Operation failed: File does not exist');
             ConsoleLogger.show('error', 'Please check the file path and try again');
-            process.exit(1);
+            abort(1);
         }
 
         let isDir = false;
@@ -2508,7 +2537,7 @@ async function main() {
         if (isDir && !options.recursive) {
             ConsoleLogger.show('error', 'Path is a directory. Use -r/--recursive to process directories.');
             ConsoleLogger.show('error', 'Operation aborted: Directory specified without --recursive flag');
-            process.exit(1);
+            abort(1);
         }
 
         const modeStr = options.decrypt ? 'decrypt' : 'encrypt';
@@ -2554,9 +2583,8 @@ async function main() {
         ConsoleLogger.show('info', `Using key file: ${options.keyfile}`, '🔐');
         keyfileData = readKeyfile(options.keyfile);
         if (!keyfileData) {
-            ConsoleLogger.show('error', 'Failed to read key file');
             ConsoleLogger.show('error', 'Operation aborted: Could not load key file');
-            process.exit(1);
+            abort(1);
         }
         ConsoleLogger.show('success', 'Key file loaded successfully');
     } else {
@@ -2567,14 +2595,14 @@ async function main() {
     options.kdf = options.kdf || 'pbkdf2';
     if (options.kdf && !['pbkdf2', 'argon2'].includes(options.kdf)) {
         ConsoleLogger.show('error', 'Invalid --kdf value. Must be "pbkdf2" or "argon2"');
-        process.exit(1);
+        abort(1);
     }
 
     // Handle KDF selection - show info before password prompt
     const kdfType = options.kdf === 'argon2' ? Config.KDF_ARGON2 : Config.KDF_PBKDF2;
     if (options.kdf === 'argon2' && !ARGON2_AVAILABLE) {
         ConsoleLogger.show('error', 'Argon2 is not available. Please install argon2: npm install argon2');
-        process.exit(1);
+        abort(1);
     }
     let iterations = options.iterations;
     if (iterations === undefined || isNaN(iterations)) {
@@ -2689,7 +2717,7 @@ async function main() {
                 ConsoleLogger.show('info', `Total time: ${elapsed.toFixed(2)}s`, '⏱️');
             } else {
                 ConsoleLogger.show('error', 'Decryption failed');
-                process.exit(1);
+                abort(1);
             }
         }
 
@@ -2884,19 +2912,13 @@ async function main() {
             logCompletionSummary(options.decrypt, successCount, totalOps, elapsed);
 
             if (failCount > 0) {
-                process.exit(1);
+                abort(1);
             }
         }
     }
 
     // Record end time
-    const endTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
-    ConsoleLogger.show('info', `Session ended at ${endTimestamp}`, '🏁');
-
-    // Write separator line and end timestamp to log file at the end of session
-    if (ConsoleLogger.LOG_ENABLED) {
-        ConsoleLogger.show('info', '='.repeat(80), null, false, true);
-    }
+    finishSession();
 }
 
 // Helper function to walk directory recursively
