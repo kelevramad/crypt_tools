@@ -36,6 +36,20 @@ try:
 except ImportError:
 	ARGON2_AVAILABLE = False
 
+try:
+	import qrcode
+
+	QRCODE_AVAILABLE = True
+except ImportError:
+	QRCODE_AVAILABLE = False
+
+try:
+	from blessed import Terminal
+
+	BLESSED_AVAILABLE = True
+except ImportError:
+	BLESSED_AVAILABLE = False
+
 
 # Reconfigure stdout/stderr to use UTF-8 encoding (supports emojis)
 def ensure_utf8(stream):
@@ -149,7 +163,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.4.3'
+	VERSION = '2.5.0'
 
 	# File format
 	MAGIC = b'CT02'
@@ -213,6 +227,115 @@ def _help_style(text: str, color: str) -> str:
 
 def _help_heading(icon: str, title: str, color: str = TerminalColors.Foreground.CYAN) -> str:
 	return _help_style(f'{icon} {title}', color)
+
+
+def render_qr_code(data: str) -> str:
+	"""Render a string as a terminal-friendly QR code."""
+	if not QRCODE_AVAILABLE:
+		raise RuntimeError('QR code support is not available. Please install the qrcode package.')
+
+	qr = qrcode.QRCode(border=1)
+	qr.add_data(data)
+	qr.make(fit=True)
+	matrix = qr.get_matrix()
+	lines = []
+	for row in matrix:
+		lines.append(''.join('██' if cell else '  ' for cell in row))
+	return '\n'.join(lines)
+
+
+def show_qr_code(data: str) -> None:
+	"""Print a rendered QR code to stdout."""
+	ConsoleLogger.show('info', 'QR Code Output:', icon='🔳', log_file=False)
+	print(render_qr_code(data))
+
+
+def interactive_file_selector(start_path: str = '.') -> Optional[str]:
+	"""Open a simple terminal file selector and return the chosen path."""
+	if not BLESSED_AVAILABLE:
+		raise RuntimeError(
+			'Interactive file selection is not available. Please install the blessed package.'
+		)
+	if not sys.stdin.isatty() or not sys.stdout.isatty():
+		raise RuntimeError('Interactive file selection requires an interactive terminal.')
+
+	term = Terminal()
+	current_dir = os.path.abspath(start_path if os.path.isdir(start_path) else os.path.dirname(start_path) or '.')
+	selected_index = 0
+	scroll_offset = 0
+	entries = []
+
+	def build_entries(directory: str):
+		parent_dir = os.path.dirname(directory)
+		items = [
+			{
+				'label': f'📁 [.] Select current directory: {directory}',
+				'path': directory,
+				'action': 'select',
+			},
+			{'label': '⬆️  [..] Go to parent directory', 'path': parent_dir, 'action': 'up'},
+		]
+		for name in sorted(os.listdir(directory), key=lambda item: (not os.path.isdir(os.path.join(directory, item)), item.lower())):
+			full_path = os.path.join(directory, name)
+			if os.path.isdir(full_path):
+				items.append({'label': f'📁 {name}', 'path': full_path, 'action': 'enter'})
+			else:
+				items.append({'label': f'📄 {name}', 'path': full_path, 'action': 'select'})
+		return items
+
+	def render_screen():
+		nonlocal scroll_offset
+		height = max(term.height - 6, 5)
+		scroll_offset = min(scroll_offset, max(len(entries) - height, 0))
+		if selected_index < scroll_offset:
+			scroll_offset = selected_index
+		if selected_index >= scroll_offset + height:
+			scroll_offset = selected_index - height + 1
+
+		lines = [
+			term.clear,
+			term.bold_cyan('Crypt Tools Interactive File Selection'),
+			term.white(f'Current directory: {current_dir}'),
+			term.yellow('Use ↑/↓ to move, Enter to open/select, Backspace/← for parent, q to cancel.'),
+			'',
+		]
+		visible_entries = entries[scroll_offset : scroll_offset + height]
+		for idx, entry in enumerate(visible_entries, start=scroll_offset):
+			prefix = '➜ ' if idx == selected_index else '  '
+			style = term.black_on_cyan if idx == selected_index else (lambda text: text)
+			lines.append(style(f'{prefix}{entry["label"]}'))
+		print('\n'.join(lines), end='', flush=True)
+
+	with term.fullscreen(), term.cbreak(), term.hidden_cursor():
+		while True:
+			entries = build_entries(current_dir)
+			selected_index = max(0, min(selected_index, len(entries) - 1))
+			render_screen()
+			key = term.inkey()
+			if key.name in ['KEY_UP'] and selected_index > 0:
+				selected_index -= 1
+			elif key.name in ['KEY_DOWN'] and selected_index < len(entries) - 1:
+				selected_index += 1
+			elif key.name in ['KEY_LEFT', 'KEY_BACKSPACE']:
+				current_dir = os.path.dirname(current_dir)
+				selected_index = 0
+				scroll_offset = 0
+			elif key.name == 'KEY_ENTER' or key == '\n' or key == '\r':
+				entry = entries[selected_index]
+				if entry['action'] == 'up':
+					current_dir = entry['path']
+					selected_index = 0
+					scroll_offset = 0
+				elif entry['action'] == 'enter':
+					current_dir = entry['path']
+					selected_index = 0
+					scroll_offset = 0
+				else:
+					print(term.clear, end='', flush=True)
+					return entry['path']
+			elif str(key).lower() in ['q', '\x1b']:
+				print(term.clear, end='', flush=True)
+				return None
 
 
 class ConsoleLogger:
@@ -2193,6 +2316,8 @@ def parse_args(argv=None):
 			'  - Password prompts show a live strength indicator.\n'
 			'  - Key file support: Use --keyfile to encrypt/decrypt with a key file.\n'
 			'    Combining password + keyfile provides two-factor encryption.\n'
+			'  - Use --select to browse for a file or directory in an interactive terminal UI.\n'
+			'  - Use --qr with text encryption to print the encrypted Base64 payload as a QR code.\n'
 			'  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.\n'
 			'    This is not identical to VeraCrypt: the footer and extra length are visible forensically;\n'
 			'    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”\n\n'
@@ -2241,6 +2366,11 @@ def parse_args(argv=None):
 	input_group.add_argument(
 		'--config',
 		help='Path to a config file (.conf, .json, .yml, .yaml); defaults are auto-discovered',
+	)
+	input_group.add_argument(
+		'--select',
+		action='store_true',
+		help='Browse and choose a file or directory interactively',
 	)
 
 	secret_group = parser.add_argument_group(_help_heading('🔑', 'Passwords & Secrets'))
@@ -2307,6 +2437,11 @@ def parse_args(argv=None):
 		type=int,
 		help='Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)',
 	)
+	crypto_group.add_argument(
+		'--qr',
+		action='store_true',
+		help='Render encrypted text output as a QR code (text encrypt mode only)',
+	)
 
 	return parser.parse_args(argv)
 
@@ -2347,6 +2482,24 @@ def main(argv=None):
 			sys.exit(0)
 		else:
 			sys.exit(1)
+
+	if args.select and args.text:
+		ConsoleLogger.show('error', '--select cannot be used with --text')
+		sys.exit(1)
+	if args.qr and (args.decrypt or not args.text):
+		ConsoleLogger.show('error', '--qr is only supported with text encryption')
+		sys.exit(1)
+	if args.select:
+		try:
+			selected_path = interactive_file_selector(args.file or '.')
+		except RuntimeError as e:
+			ConsoleLogger.show('error', str(e))
+			sys.exit(1)
+		if not selected_path:
+			ConsoleLogger.show('error', 'Interactive file selection cancelled')
+			sys.exit(1)
+		args.file = selected_path
+		ConsoleLogger.show('info', f'Selected path: {selected_path}', icon='🧭')
 
 	# Validate text or file is provided (required for non-generate-keyfile operations)
 	if not args.text and not args.file:
@@ -2803,6 +2956,8 @@ def main(argv=None):
 			)
 			b64_result = base64.b64encode(result).decode('utf-8')
 			ConsoleLogger.show('success', f'Encrypted (Base64): {b64_result}')
+			if args.qr:
+				show_qr_code(b64_result)
 			elapsed_time = time.time() - start_time
 			ConsoleLogger.show(
 				'info', f'Output encrypted text length: {len(b64_result)} characters'

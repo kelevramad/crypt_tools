@@ -504,6 +504,44 @@ def test_cli_uses_password_from_env(monkeypatch, capsys, tmp_path):
 	assert 'Encrypted (Base64):' in captured.out
 
 
+def test_cli_encrypt_text_with_qr(monkeypatch, capsys):
+	"""QR mode should render a QR code from encrypted base64 output."""
+	rendered = {}
+
+	def fake_show_qr_code(data):
+		rendered['data'] = data
+
+	monkeypatch.setattr(crypt_tools, 'show_qr_code', fake_show_qr_code)
+
+	main(['--encrypt', '-t', 'hello', '-p', 'pw', '--qr'])
+
+	captured = capsys.readouterr()
+	assert 'Encrypted (Base64):' in captured.out
+	assert rendered['data']
+
+
+def test_cli_qr_requires_text_encrypt(capsys):
+	"""QR mode should reject decrypt/file workflows."""
+	with pytest.raises(SystemExit) as excinfo:
+		main(['--decrypt', '-t', 'hello', '-p', 'pw', '--qr'])
+
+	assert excinfo.value.code == 1
+	captured = capsys.readouterr()
+	assert '--qr is only supported with text encryption' in captured.out
+
+
+def test_cli_select_uses_interactive_selector(monkeypatch, tmp_path):
+	"""--select should populate the file path from the interactive selector."""
+	infile = tmp_path / 'chosen.txt'
+	infile.write_text('selected content', encoding='utf-8')
+
+	monkeypatch.setattr(crypt_tools, 'interactive_file_selector', lambda start='.': str(infile))
+
+	main(['--encrypt', '--select', '-p', 'pw'])
+
+	assert (tmp_path / 'chosen.txt.enc').exists()
+
+
 def test_recursive_directory(engine):
 	"""Test recursive directory encryption."""
 	password = 'dir_pass'

@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.4.3 |
+| **Version** | 2.5.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -52,6 +52,8 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **File Logging** | Optional timestamped log file for audit trail |
 | **Configuration File Defaults** | Load common defaults from `.crypt_tools.conf`, `.crypt_tools.json`, `.crypt_tools.yml`, or `.crypt_tools.yaml` |
 | **Environment Variable Defaults** | Support `CRYPT_TOOLS_PASSWORD`, `CRYPT_TOOLS_KDF`, `CRYPT_TOOLS_ITERATIONS`, and related CLI defaults |
+| **Interactive File Selection** | Browse and choose a file or directory from a terminal UI with `--select` |
+| **QR Code Output** | Render encrypted text as a terminal QR code with `--qr` |
 | **Key File Support** | Generate and use key files for two-factor encryption |
 | **Hidden volumes (containers)** | Optional two-layer file: decoy payload (outer password) + real payload (hidden password); `CTHV` footer marks split; file-only, not full-disk VeraCrypt semantics |
 
@@ -117,7 +119,9 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 
 | Package | Version | Purpose |
 |---------|---------|---------|
+| `blessed` | ≥1.38.0 | Terminal UI for interactive file selection |
 | `pycryptodome` | ≥3.21.0 | AES-GCM cryptography |
+| `qrcode` | ≥8.2 | QR code generation for text encryption output |
 | `tqdm` | ≥4.66.0 | Progress bars |
 | `zlib` | (stdlib) | Compression |
 
@@ -146,12 +150,14 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--file` | `-f` | Input file/directory path or wildcard pattern (e.g., `*.md`, `tests\\*.pyc`) | Required |
 | `--output` | `-o` | Output file path | Auto-generated |
 | `--config` | — | Config file path for CLI defaults | Auto-discover in current working directory |
+| `--select` | — | Launch interactive file/directory selection | Disabled |
 | `--password` | `-p` | Password | Interactive prompt |
 | `--keyfile` | — | Key file path for encryption/decryption | None |
 | `--compress` | `-c` | Enable zlib compression | Disabled |
 | `--recursive` | `-r` | Process directories or wildcard patterns recursively | Disabled |
 | `--kdf` | — | Key derivation function: `pbkdf2` (default) or `argon2` | `pbkdf2` |
 | `--iterations` | — | Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2) | varies |
+| `--qr` | — | Render encrypted text output as a QR code | Disabled |
 | `--log` | — | Enable file logging to `crypt_tools.log` | Disabled |
 | `--debug` | — | Enable debug logging | Disabled |
 | `--version` | `-V` | Show version | — |
@@ -167,6 +173,9 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 ```bash
 # Encrypt text
 uv run crypt_tools.py --encrypt -t "Secret Message" -p "password"
+
+# Encrypt text and print a QR code
+uv run crypt_tools.py --encrypt -t "Secret Message" -p "password" --qr
 
 # Decrypt text
 uv run crypt_tools.py --decrypt -t "base64_encrypted_string" -p "password"
@@ -200,6 +209,9 @@ $env:CRYPT_TOOLS_PASSWORD="password"
 $env:CRYPT_TOOLS_KDF="argon2"
 $env:CRYPT_TOOLS_ITERATIONS="3"
 uv run crypt_tools.py --encrypt -t "Secret Message"
+
+# Choose a file interactively from a terminal UI
+uv run crypt_tools.py --encrypt --select -p "password"
 
 # Encrypt a group of files by pattern
 uv run crypt_tools.py --encrypt -f "*.md" -p "password"
@@ -256,6 +268,8 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "real_pw" -o recove
 | Password Mismatch | ✓ Exit on verification failure |
 | Config file defaults | ✓ Auto-discovery, explicit `--config`, and precedence behavior |
 | Environment variable defaults | ✓ Password/KDF/iteration defaults for non-interactive usage |
+| QR code output | ✓ Text encryption can render a terminal QR code |
+| Interactive file selection | ✓ Selector populates the file path for CLI flows |
 | Recursive Processing | ✓ Directory tree handling |
 | Hidden-volume containers | ✓ Round-trip outer/hidden, footer parse, inspect metadata |
 
@@ -296,6 +310,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 | **File Extension** | Encrypted files use `.enc` by default; decrypted files use `.dec` |
 | **Output Override** | `--output` applies only to single-file operations |
 | **Interactive Mode** | Requires terminal for password prompts |
+| **File Selector** | `--select` requires an interactive terminal and is intentionally single-selection |
 | **Memory** | Chunk-based but requires ~64KB buffer |
 | **Log File** | Log file accumulates entries; manual cleanup required |
 | **Config Parser Scope** | YAML support is intentionally limited to flat `key: value` pairs; nested YAML is not supported |
@@ -307,8 +322,6 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Feature | Priority | Description |
 |---------|----------|-------------|
-| Interactive File Selection | Low | Add a TUI browser for selecting files/directories |
-| QR Code Output | Low | Render encrypted text as a QR code for air-gapped transfer |
 | GUI Interface | Low | Desktop application wrapper |
 | Multi-threading | Low | Parallel file processing |
 | Cloud Integration | Low | Direct S3/Drive encryption |
@@ -319,6 +332,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.5.0 | 2026-04-03 | Added interactive file selection (`--select`) using a terminal UI, QR code output for text encryption (`--qr`), new Python/Node QR and TUI dependencies, and test coverage for the new flows |
 | 2.4.3 | 2026-04-03 | Added grouped/colorized CLI help, expanded `--help` with environment variables and config keys, and normalized release versions across scripts, docs, and package metadata |
 | 2.4.2 | 2026-04-03 | Added configuration-file defaults (`--config`, `.crypt_tools.{conf,json,yml,yaml}`), environment-variable defaults (`CRYPT_TOOLS_*`), README examples, and sample config templates |
 | 2.4.1 | 2026-04-03 | Inlined Shamir logic into the CLI scripts, fixed threshold password prompting and compressed threshold decryption, and expanded inspect output for threshold files and hidden containers |
@@ -353,5 +367,5 @@ crypt_tools/
 
 ---
 
-**Document Version:** 1.5
+**Document Version:** 1.6
 **Last Updated:** April 3, 2026

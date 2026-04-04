@@ -15,6 +15,24 @@ const { finished, pipeline } = require('stream/promises');
 const { program } = require('commander');
 const ProgressBar = require('progress');
 
+let blessed;
+let BLESSED_AVAILABLE = false;
+try {
+    blessed = require('blessed');
+    BLESSED_AVAILABLE = true;
+} catch (e) {
+    // blessed not available
+}
+
+let qrcodeTerminal;
+let QRCODE_AVAILABLE = false;
+try {
+    qrcodeTerminal = require('qrcode-terminal');
+    QRCODE_AVAILABLE = true;
+} catch (e) {
+    // qrcode-terminal not available
+}
+
 let argon2;
 let ARGON2_AVAILABLE = false;
 try {
@@ -138,7 +156,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.4.3';
+    static VERSION = '2.5.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -226,6 +244,7 @@ function renderNodeHelp(cmd) {
             ['-f, --file <path>', 'File path, directory, or wildcard pattern'],
             ['-o, --output <path>', 'Output file path'],
             ['--config <path>', 'Path to a config file; defaults are auto-discovered'],
+            ['--select', 'Browse and choose a file or directory interactively'],
         ],
         [
             ['🔑', 'Passwords & Secrets'],
@@ -247,6 +266,7 @@ function renderNodeHelp(cmd) {
             ['🧬', 'Crypto Tuning'],
             ['--kdf <type>', 'Key derivation function: pbkdf2 or argon2'],
             ['--iterations <count>', 'Number of KDF iterations'],
+            ['--qr', 'Render encrypted text output as a QR code'],
         ],
         [
             ['🛠️', 'Utility'],
@@ -276,6 +296,8 @@ function renderNodeHelp(cmd) {
         '    (equivalent to .\\temp\\**\\*.txt).',
         '  - Password prompts show a live strength indicator.',
         '  - Key file support: combine password + keyfile for two-factor encryption.',
+        '  - Use --select to browse for a file or directory in an interactive terminal UI.',
+        '  - Use --qr with text encryption to print the encrypted Base64 payload as a QR code.',
         '  - Hidden volumes use two CT02 blobs plus a visible CTHV footer.',
         '',
         helpHeading('🌍', 'Environment Variables'),
@@ -294,6 +316,149 @@ function renderNodeHelp(cmd) {
         '  keyfile, default_keyfile, threshold',
         '',
     ].join('\n');
+}
+
+function renderQrCode(data) {
+    if (!QRCODE_AVAILABLE) {
+        throw new Error('QR code support is not available. Please install qrcode-terminal.');
+    }
+
+    return new Promise((resolve) => {
+        qrcodeTerminal.generate(data, { small: true }, (qrText) => {
+            ConsoleLogger.show('info', 'QR Code Output:', '🔳', true, false);
+            process.stdout.write(`${qrText}\n`);
+            resolve(qrText);
+        });
+    });
+}
+
+function selectPathInteractive(startPath = '.') {
+    if (!BLESSED_AVAILABLE) {
+        return Promise.reject(
+            new Error('Interactive file selection is not available. Please install blessed.')
+        );
+    }
+    if (!process.stdin.isTTY || !process.stdout.isTTY) {
+        return Promise.reject(new Error('Interactive file selection requires an interactive terminal.'));
+    }
+
+    const initialPath = fs.existsSync(startPath) && fs.statSync(startPath).isDirectory()
+        ? startPath
+        : path.dirname(startPath || '.') || '.';
+
+    return new Promise((resolve) => {
+        const screen = blessed.screen({
+            smartCSR: true,
+            title: 'Crypt Tools Interactive File Selection',
+        });
+
+        const header = blessed.box({
+            parent: screen,
+            top: 0,
+            left: 0,
+            width: '100%',
+            height: 3,
+            tags: false,
+            style: {
+                fg: 'white',
+                bg: 'blue',
+            },
+            content: ' Crypt Tools Interactive File Selection\n Use arrows to move, Enter to open/select, Backspace for parent, q to cancel',
+        });
+
+        const pathBox = blessed.box({
+            parent: screen,
+            top: 3,
+            left: 0,
+            width: '100%',
+            height: 2,
+            style: { fg: 'cyan' },
+        });
+
+        const list = blessed.list({
+            parent: screen,
+            top: 5,
+            left: 0,
+            width: '100%',
+            height: '100%-5',
+            keys: true,
+            vi: true,
+            mouse: true,
+            style: {
+                selected: {
+                    bg: 'cyan',
+                    fg: 'black',
+                    bold: true,
+                },
+            },
+            border: 'line',
+            label: ' Paths ',
+        });
+
+        let currentDir = path.resolve(initialPath);
+        let currentEntries = [];
+
+        function close(result) {
+            screen.destroy();
+            resolve(result);
+        }
+
+        function buildEntries(directory) {
+            const entries = [
+                { label: `📁 [.] Select current directory: ${directory}`, path: directory, action: 'select' },
+                { label: '⬆️  [..] Go to parent directory', path: path.dirname(directory), action: 'up' },
+            ];
+
+            const names = fs.readdirSync(directory).sort((a, b) => {
+                const aPath = path.join(directory, a);
+                const bPath = path.join(directory, b);
+                const aDir = fs.statSync(aPath).isDirectory();
+                const bDir = fs.statSync(bPath).isDirectory();
+                if (aDir !== bDir) {
+                    return aDir ? -1 : 1;
+                }
+                return a.localeCompare(b, undefined, { sensitivity: 'base' });
+            });
+
+            for (const name of names) {
+                const fullPath = path.join(directory, name);
+                const isDir = fs.statSync(fullPath).isDirectory();
+                entries.push({
+                    label: `${isDir ? '📁' : '📄'} ${name}`,
+                    path: fullPath,
+                    action: isDir ? 'enter' : 'select',
+                });
+            }
+            return entries;
+        }
+
+        function refresh(directory) {
+            currentDir = path.resolve(directory);
+            currentEntries = buildEntries(currentDir);
+            pathBox.setContent(` Current directory: ${currentDir}`);
+            list.setItems(currentEntries.map((entry) => entry.label));
+            list.select(0);
+            screen.render();
+        }
+
+        list.on('select', (_, index) => {
+            const entry = currentEntries[index];
+            if (!entry) {
+                return;
+            }
+            if (entry.action === 'up' || entry.action === 'enter') {
+                refresh(entry.path);
+            } else {
+                close(entry.path);
+            }
+        });
+
+        screen.key(['backspace', 'left'], () => refresh(path.dirname(currentDir)));
+        screen.key(['q', 'escape', 'C-c'], () => close(null));
+
+        refresh(currentDir);
+        list.focus();
+    });
 }
 
 let nonTtyPasswordLinesPromise = null;
@@ -2048,6 +2213,7 @@ async function main() {
         .option('-f, --file <path>', 'File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
         .option('-o, --output <path>', 'Output file path')
         .option('--config <path>', 'Path to a config file (.conf, .json, .yml, .yaml); defaults are auto-discovered')
+        .option('--select', 'Browse and choose a file or directory interactively', false)
         .option('-p, --password <password>', 'Password (can be specified multiple times for threshold mode)', (val, arr) => [...arr, val], [])
         .option('--threshold <number>', 'Threshold for multi-signature mode (e.g., 2 for 2 of 3)', parseInt)
         .option('--keyfile <path>', 'Key file path for encryption/decryption (use with or without password)')
@@ -2060,6 +2226,7 @@ async function main() {
         .option('-r, --recursive', 'Recursively process directories or wildcard patterns (uses ** for subfolders)', false)
         .option('--kdf <type>', 'Key derivation function: pbkdf2 (default) or argon2 (more secure)')
         .option('--iterations <count>', 'Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)', parseInt)
+        .option('--qr', 'Render encrypted text output as a QR code (text encrypt mode only)', false)
         .option('--debug', 'Enable debug mode', false)
         .option('--log', 'Enable logging to file', false);
 
@@ -2095,6 +2262,39 @@ async function main() {
 
     // Show banner first
     Banner.show();
+
+    if (options.select && options.text) {
+        ConsoleLogger.show('error', '--select cannot be used with --text');
+        process.exit(1);
+    }
+    if (options.qr && (options.decrypt || !options.text)) {
+        ConsoleLogger.show('error', '--qr is only supported with text encryption');
+        process.exit(1);
+    }
+    if (options.select) {
+        const shouldRedrawBanner = Boolean(process.stdin.isTTY && process.stdout.isTTY);
+        try {
+            const selectedPath = await selectPathInteractive(options.file || '.');
+            if (!selectedPath) {
+                if (shouldRedrawBanner) {
+                    Banner.show();
+                }
+                ConsoleLogger.show('error', 'Interactive file selection cancelled');
+                process.exit(1);
+            }
+            if (shouldRedrawBanner) {
+                Banner.show();
+            }
+            options.file = selectedPath;
+            ConsoleLogger.show('info', `Selected path: ${selectedPath}`, '🧭');
+        } catch (err) {
+            if (shouldRedrawBanner) {
+                Banner.show();
+            }
+            ConsoleLogger.show('error', err.message);
+            process.exit(1);
+        }
+    }
 
     // Require either text or file (skip for --generate-keyfile)
     if (!options.generateKeyfile) {
@@ -2467,6 +2667,9 @@ async function main() {
             const result = await engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData, kdfType, iterations);
             const b64Result = result.toString('base64');
             ConsoleLogger.show('success', `Encrypted (Base64): ${b64Result}`);
+            if (options.qr) {
+                await renderQrCode(b64Result);
+            }
             const elapsed = (Date.now() - startTime) / 1000;
             ConsoleLogger.show('info', `Output encrypted text length: ${b64Result.length} characters`);
             ConsoleLogger.show('success', 'Encryption completed successfully', '✅');
@@ -2792,8 +2995,16 @@ function expandFilePattern(pattern, recursive) {
     return matches;
 }
 
-// Run main
-main().catch((err) => {
-    ConsoleLogger.show('error', `Unexpected error: ${err.message}`);
-    process.exit(1);
-});
+if (require.main === module) {
+    main().catch((err) => {
+        ConsoleLogger.show('error', `Unexpected error: ${err.message}`);
+        process.exit(1);
+    });
+} else {
+    module.exports = {
+        main,
+        renderQrCode,
+        selectPathInteractive,
+        renderNodeHelp,
+    };
+}

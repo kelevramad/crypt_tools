@@ -1,6 +1,6 @@
 {
   "name": "crypt-tools",
-  "version": "2.4.3",
+  "version": "2.5.0",
   "description": "Cryptographic Tool for File and Text Encryption/Decryption (AES-GCM Edition)",
   "main": "crypt_tools.js",
   "bin": {
@@ -27,8 +27,10 @@
   },
   "dependencies": {
     "argon2": "^0.44.0",
+    "blessed": "^0.1.81",
     "commander": "^12.0.0",
-    "progress": "^2.0.3"
+    "progress": "^2.0.3",
+    "qrcode-terminal": "^0.12.0"
   },
   "devDependencies": {
     "c8": "^10.1.2"

@@ -19,6 +19,8 @@
 - **Inspect Mode**: View encrypted file metadata without decrypting it.
 - **Key File Support**: Generate and use key files for two-factor encryption (password + key file).
 - **Argon2 Support**: Modern Argon2id key derivation alternative with configurable iterations via `--kdf` and `--iterations` flags.
+- **Interactive File Selection**: Launch a terminal file picker with `--select` to browse and choose a file or directory.
+- **QR Code Output**: Render encrypted text as a terminal QR code with `--qr` for air-gapped transfer.
 - **Hidden volumes (containers)**: Optional two-password file container—decoy content with the outer password, sensitive content with the hidden password; similar in *goal* to VeraCrypt’s hidden volume, implemented as two `CT02` blobs plus a small `CTHV` footer (see limitations below).
 
 ## Installation
@@ -26,7 +28,9 @@
 ### Prerequisites
 - Python 3.13+
 - Dependencies (managed via `uv` or `pip`):
+  - `blessed`
   - `pycryptodome`
+  - `qrcode`
   - `tqdm` (Progress Bar)
   - `zlib` (Standard Library)
 
@@ -50,6 +54,12 @@ uv run crypt_tools.py --encrypt -t "Secret Message" -p "your_password"
 Decrypt a base64 encoded string.
 ```bash
 uv run crypt_tools.py --decrypt -t "encrypted_base64_string" -p "your_password"
+```
+
+### Encrypt a String as QR Code
+Render the encrypted Base64 payload as a terminal QR code for scanning on another device.
+```bash
+uv run crypt_tools.py --encrypt -t "secret" -p "your_password" --qr
 ```
 
 ### Encrypt a File
@@ -202,6 +212,18 @@ uv run crypt_tools.py --encrypt -r -f ".\\tests\\*.pyc" -p "your_password"
 **Note (Windows/Powershell):** Quote wildcard patterns like `"*.md"` to avoid shell expansion.
 **Recursive wildcard note:** With `-r`, patterns like `.\\tests\\*.pyc` are expanded recursively (equivalent to `.\\tests\\**\\*.pyc`).
 
+### Interactive File Selection
+Use the built-in terminal file picker to choose a file or directory interactively.
+```bash
+# Choose a file or directory from the current folder
+uv run crypt_tools.py --encrypt --select -p "your_password"
+
+# Start browsing from a specific directory
+uv run crypt_tools.py --decrypt --select -f .\\documents -p "your_password"
+```
+
+`--select` requires an interactive terminal and cannot be combined with `--text`.
+
 ### Key File Support
 Generate and use key files for two-factor encryption (password + key file):
 ```bash
@@ -277,12 +299,14 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |
 | `--config` | — | Config file path for CLI defaults |
+| `--select` | — | Browse and choose a file or directory interactively |
 | `--password` | `-p` | Password (optional, will prompt if missing) |
 | `--keyfile` | — | Key file path for encryption/decryption |
 | `--compress` | `-c` | Enable compression |
 | `--recursive` | `-r` | Recursively process directories |
 | `--kdf` | — | Key derivation function: `pbkdf2` (default) or `argon2` |
 | `--iterations` | — | Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2) |
+| `--qr` | — | Render encrypted text output as a QR code (text encrypt mode only) |
 | `--log` | — | Enable logging to file (`crypt_tools.log`) |
 | `--debug` | — | Enable debug mode |
 | `--version` | `-V` | Show version |
@@ -317,7 +341,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.4.3 Specifications
+### Version 2.5.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -438,4 +462,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.4.3
+**Version**: 2.5.0

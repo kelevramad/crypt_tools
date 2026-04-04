@@ -1,12 +1,14 @@
 [project]
 name = "crypt-tools"
-version = "2.4.3"
+version = "2.5.0"
 description = "Crypt Tools"
 readme = "README.md"
 requires-python = ">=3.13"
 dependencies = [
     "argon2-cffi>=25.1.0",
+    "blessed>=1.38.0",
     "pycryptodome>=3.21.0",
+    "qrcode>=8.2",
     "ruff>=0.7.4",
     "tqdm>=4.66.0",
 ]

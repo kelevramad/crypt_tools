@@ -7,6 +7,7 @@ const { spawnSync } = require('node:child_process');
 
 const BIN = path.join(__dirname, '..', 'crypt_tools.js');
 const NODE = process.execPath;
+const cryptTools = require('../crypt_tools.js');
 
 function stripAnsi(s) {
   return s.replace(/\x1b\[[0-9;]*m/g, '');
@@ -95,6 +96,44 @@ test('uses password from CRYPT_TOOLS_PASSWORD', () => {
 
   assert.equal(res.code, 0, res.stdout + res.stderr);
   assert.match(res.stdout, /Encrypted \(Base64\):/);
+});
+
+test('encrypt text with --qr prints a QR code', () => {
+  const res = runCLI(['-t', 'hello', '-p', 'pw', '--qr']);
+  assert.equal(res.code, 0, res.stdout + res.stderr);
+  assert.match(res.stdout, /Encrypted \(Base64\):/);
+  assert.match(res.stdout, /QR Code Output:/);
+});
+
+test('--qr rejects decrypt mode', () => {
+  const res = runCLI(['-d', '-t', 'hello', '-p', 'pw', '--qr']);
+  assert.equal(res.code, 1);
+  assert.match(res.stdout + res.stderr, /--qr is only supported with text encryption/);
+});
+
+test('--select requires an interactive terminal', () => {
+  const res = runCLI(['--encrypt', '--select', '-p', 'pw']);
+  assert.equal(res.code, 1);
+  assert.match(res.stdout + res.stderr, /Interactive file selection requires an interactive terminal/);
+});
+
+test('renderQrCode helper returns rendered output', async () => {
+  let printed = '';
+  const originalWrite = process.stdout.write;
+  process.stdout.write = (chunk, encoding, callback) => {
+    printed += String(chunk);
+    if (typeof encoding === 'function') encoding();
+    if (typeof callback === 'function') callback();
+    return true;
+  };
+
+  try {
+    const qr = await cryptTools.renderQrCode('hello');
+    assert.ok(qr.length > 0);
+    assert.match(printed, /QR Code Output:/);
+  } finally {
+    process.stdout.write = originalWrite;
+  }
 });
 
 test('rejects multiple passwords without threshold', () => {
@@ -758,7 +797,6 @@ test('inspect shows argon2 kdf', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
-
 
 
 
