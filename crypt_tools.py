@@ -7,6 +7,7 @@ Refactored version with AES-GCM and Streaming I/O.
 import argparse
 import base64
 import hashlib
+import json
 import os
 import random
 import sys
@@ -148,7 +149,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.4.1'
+	VERSION = '2.4.3'
 
 	# File format
 	MAGIC = b'CT02'
@@ -198,6 +199,20 @@ class TerminalColors:
 		CYAN = '\033[96m'
 		MAGENTA = '\033[95m'
 		WHITE = '\033[97m'
+
+
+def _help_use_color() -> bool:
+	return sys.stdout.isatty()
+
+
+def _help_style(text: str, color: str) -> str:
+	if not _help_use_color():
+		return text
+	return f'{color}{text}{TerminalColors.RESET}'
+
+
+def _help_heading(icon: str, title: str, color: str = TerminalColors.Foreground.CYAN) -> str:
+	return _help_style(f'{icon} {title}', color)
 
 
 class ConsoleLogger:
@@ -347,6 +362,225 @@ def _single_password_arg(password_value) -> str:
 	if isinstance(password_value, list):
 		return password_value[0] if password_value else ''
 	return password_value or ''
+
+
+CONFIG_FILENAMES = (
+	'.crypt_tools.conf',
+	'.crypt_tools.json',
+	'.crypt_tools.yml',
+	'.crypt_tools.yaml',
+)
+
+CONFIG_KEY_ALIASES = {
+	'compress': 'compress',
+	'compression': 'compress',
+	'default_compression': 'compress',
+	'kdf': 'kdf',
+	'default_kdf': 'kdf',
+	'iterations': 'iterations',
+	'default_iterations': 'iterations',
+	'log': 'log',
+	'logging': 'log',
+	'log_enabled': 'log',
+	'debug': 'debug',
+	'debug_enabled': 'debug',
+	'password': 'password',
+	'default_password': 'password',
+	'password_outer': 'password_outer',
+	'default_password_outer': 'password_outer',
+	'password_hidden': 'password_hidden',
+	'default_password_hidden': 'password_hidden',
+	'keyfile': 'keyfile',
+	'default_keyfile': 'keyfile',
+	'threshold': 'threshold',
+}
+
+ENV_KEY_ALIASES = {
+	'CRYPT_TOOLS_COMPRESS': 'compress',
+	'CRYPT_TOOLS_COMPRESSION': 'compress',
+	'CRYPT_TOOLS_KDF': 'kdf',
+	'CRYPT_TOOLS_ITERATIONS': 'iterations',
+	'CRYPT_TOOLS_LOG': 'log',
+	'CRYPT_TOOLS_LOG_ENABLED': 'log',
+	'CRYPT_TOOLS_DEBUG': 'debug',
+	'CRYPT_TOOLS_DEBUG_ENABLED': 'debug',
+	'CRYPT_TOOLS_PASSWORD': 'password',
+	'CRYPT_TOOLS_PASSWORD_OUTER': 'password_outer',
+	'CRYPT_TOOLS_PASSWORD_HIDDEN': 'password_hidden',
+	'CRYPT_TOOLS_KEYFILE': 'keyfile',
+	'CRYPT_TOOLS_THRESHOLD': 'threshold',
+}
+
+CLI_OPTION_ALIASES = {
+	'--compress': 'compress',
+	'-c': 'compress',
+	'--kdf': 'kdf',
+	'--iterations': 'iterations',
+	'--log': 'log',
+	'--debug': 'debug',
+	'-p': 'password',
+	'--password': 'password',
+	'--password-outer': 'password_outer',
+	'--password-hidden': 'password_hidden',
+	'--keyfile': 'keyfile',
+	'--threshold': 'threshold',
+	'--config': 'config',
+}
+
+
+def _normalize_config_key(raw_key: str) -> Optional[str]:
+	return CONFIG_KEY_ALIASES.get(raw_key.strip().lower().replace('-', '_'))
+
+
+def _parse_bool(value):
+	if isinstance(value, bool):
+		return value
+	if isinstance(value, int):
+		return bool(value)
+	normalized = str(value).strip().lower()
+	if normalized in {'1', 'true', 'yes', 'on'}:
+		return True
+	if normalized in {'0', 'false', 'no', 'off'}:
+		return False
+	raise ValueError(f'Invalid boolean value: {value}')
+
+
+def _coerce_config_value(key: str, value):
+	if key in {'compress', 'log', 'debug'}:
+		return _parse_bool(value)
+	if key in {'iterations', 'threshold'}:
+		return int(value)
+	if key == 'kdf':
+		return str(value).strip().lower()
+	if key in {'password', 'password_outer', 'password_hidden', 'keyfile'}:
+		return str(value)
+	return value
+
+
+def _parse_simple_yaml(content: str):
+	data = {}
+	for line in content.splitlines():
+		stripped = line.strip()
+		if not stripped or stripped.startswith('#'):
+			continue
+		if ':' not in stripped:
+			raise ValueError(f'Invalid YAML line: {line}')
+		key, raw_value = stripped.split(':', 1)
+		data[key.strip()] = raw_value.strip()
+	return data
+
+
+def _parse_simple_conf(content: str):
+	data = {}
+	for line in content.splitlines():
+		stripped = line.strip()
+		if not stripped or stripped.startswith('#') or stripped.startswith(';'):
+			continue
+		separator = '=' if '=' in stripped else ':'
+		if separator not in stripped:
+			raise ValueError(f'Invalid config line: {line}')
+		key, raw_value = stripped.split(separator, 1)
+		data[key.strip()] = raw_value.strip()
+	return data
+
+
+def _read_config_file(config_path: str):
+	_, ext = os.path.splitext(config_path.lower())
+	with open(config_path, encoding='utf-8') as f:
+		content = f.read()
+
+	if ext == '.json':
+		parsed = json.loads(content)
+	elif ext in {'.yml', '.yaml'}:
+		parsed = _parse_simple_yaml(content)
+	else:
+		parsed = _parse_simple_conf(content)
+
+	if not isinstance(parsed, dict):
+		raise ValueError('Configuration file must contain a top-level object')
+
+	normalized = {}
+	for raw_key, raw_value in parsed.items():
+		key = _normalize_config_key(str(raw_key))
+		if not key:
+			continue
+		normalized[key] = _coerce_config_value(key, raw_value)
+	return normalized
+
+
+def _discover_config_path(explicit_path: Optional[str] = None):
+	if explicit_path:
+		return explicit_path, True
+
+	for filename in CONFIG_FILENAMES:
+		candidate = os.path.join(os.getcwd(), filename)
+		if os.path.exists(candidate) and os.path.isfile(candidate):
+			return candidate, False
+	return None, False
+
+
+def _load_runtime_defaults(explicit_config_path: Optional[str] = None):
+	config_path, explicit = _discover_config_path(explicit_config_path)
+	config_defaults = {}
+	if config_path:
+		try:
+			config_defaults = _read_config_file(config_path)
+		except Exception as e:
+			raise ValueError(f'Failed to load config file {config_path}: {e}') from e
+	elif explicit:
+		raise ValueError(f'Config file not found: {explicit_config_path}')
+
+	env_defaults = {}
+	for env_key, normalized_key in ENV_KEY_ALIASES.items():
+		raw_value = os.environ.get(env_key)
+		if raw_value in [None, '']:
+			continue
+		env_defaults[normalized_key] = _coerce_config_value(normalized_key, raw_value)
+
+	return config_path, config_defaults, env_defaults
+
+
+def _detect_cli_overrides(argv=None):
+	tokens = sys.argv[1:] if argv is None else list(argv)
+	overrides = set()
+	for token in tokens:
+		if token.startswith('--'):
+			flag = token.split('=', 1)[0]
+			normalized = CLI_OPTION_ALIASES.get(flag)
+			if normalized:
+				overrides.add(normalized)
+		elif token in CLI_OPTION_ALIASES:
+			overrides.add(CLI_OPTION_ALIASES[token])
+	return overrides
+
+
+def _apply_runtime_defaults(args, cli_overrides, config_defaults, env_defaults):
+	merged_defaults = dict(config_defaults)
+	merged_defaults.update(env_defaults)
+
+	if 'password' not in cli_overrides and not args.password and 'password' in merged_defaults:
+		password_value = merged_defaults['password']
+		args.password = password_value if isinstance(password_value, list) else [password_value]
+
+	for attr in ['password_outer', 'password_hidden', 'keyfile', 'threshold']:
+		if attr in cli_overrides:
+			continue
+		if getattr(args, attr) is None and attr in merged_defaults:
+			setattr(args, attr, merged_defaults[attr])
+
+	for attr in ['compress', 'log', 'debug']:
+		if attr in cli_overrides:
+			continue
+		if attr in merged_defaults:
+			setattr(args, attr, bool(merged_defaults[attr]))
+
+	if 'kdf' not in cli_overrides and args.kdf is None and 'kdf' in merged_defaults:
+		args.kdf = merged_defaults['kdf']
+
+	if 'iterations' not in cli_overrides and args.iterations is None and 'iterations' in merged_defaults:
+		args.iterations = merged_defaults['iterations']
+
+	return args
 
 
 def _build_header(
@@ -1947,9 +2181,13 @@ def getpass_verify_with_strength(
 
 def parse_args(argv=None):
 	parser = argparse.ArgumentParser(
-		description=Config.DESCRIPTION,
+		prog='crypt_tools.py',
+		description=(
+			f'{_help_heading("🔐", "Crypt Tools Help")}\n'
+			f'{_help_style("Beautiful, secure AES-GCM encryption for files and text.", TerminalColors.Foreground.WHITE)}'
+		),
 		epilog=(
-			'Notes:\n'
+			f'{_help_heading("✨", "Tips")}\n'
 			'  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively\n'
 			'    (equivalent to .\\temp\\**\\*.txt).\n'
 			'  - Password prompts show a live strength indicator.\n'
@@ -1957,92 +2195,118 @@ def parse_args(argv=None):
 			'    Combining password + keyfile provides two-factor encryption.\n'
 			'  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.\n'
 			'    This is not identical to VeraCrypt: the footer and extra length are visible forensically;\n'
-			'    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”'
+			'    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”\n\n'
+			f'{_help_heading("🌍", "Environment Variables")}\n'
+			'  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,\n'
+			'  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,\n'
+			'  CRYPT_TOOLS_LOG_ENABLED, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_DEBUG_ENABLED,\n'
+			'  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD,\n'
+			'  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN\n\n'
+			f'{_help_heading("⚙️", "Config Keys")}\n'
+			'  compress, compression, default_compression, kdf, default_kdf,\n'
+			'  iterations, default_iterations, log, logging, log_enabled,\n'
+			'  debug, debug_enabled, password, default_password,\n'
+			'  password_outer, default_password_outer,\n'
+			'  password_hidden, default_password_hidden,\n'
+			'  keyfile, default_keyfile, threshold'
 		),
 		formatter_class=argparse.RawTextHelpFormatter,
+		add_help=False,
 	)
-	parser.add_argument(
+	utility_group = parser.add_argument_group(_help_heading('🛠️', 'Utility'))
+	utility_group.add_argument(
 		'--generate-keyfile', dest='generate_keyfile', help='Generate a random key file and exit'
 	)
+	utility_group.add_argument('--debug', action='store_true', help='Enable debug mode')
+	utility_group.add_argument('--log', action='store_true', help='Enable logging to file')
+	utility_group.add_argument('-v', '--version', action='version', version=Config.VERSION)
+	utility_group.add_argument('-h', '--help', action='help', help='Show this help message and exit')
 
-	mode_group = parser.add_mutually_exclusive_group()
+	mode_group = parser.add_argument_group(_help_heading('🎯', 'Modes')).add_mutually_exclusive_group()
 	mode_group.add_argument('-e', '--encrypt', action='store_true', help='Encrypt mode (default)')
 	mode_group.add_argument('-d', '--decrypt', action='store_true', help='Decrypt mode')
 	mode_group.add_argument(
 		'--inspect', action='store_true', help='Inspect encrypted file metadata'
 	)
 
-	group = parser.add_mutually_exclusive_group()
+	input_group = parser.add_argument_group(_help_heading('📥', 'Input & Output'))
+	group = input_group.add_mutually_exclusive_group()
 	group.add_argument('-t', '--text', help='Text to process')
 	group.add_argument(
 		'-f',
 		'--file',
 		help='File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")',
 	)
+	input_group.add_argument('-o', '--output', help='Output file path')
+	input_group.add_argument(
+		'--config',
+		help='Path to a config file (.conf, .json, .yml, .yaml); defaults are auto-discovered',
+	)
 
-	parser.add_argument('-o', '--output', help='Output file path')
-	parser.add_argument(
+	secret_group = parser.add_argument_group(_help_heading('🔑', 'Passwords & Secrets'))
+	secret_group.add_argument(
 		'-p',
 		'--password',
 		action='append',
 		default=[],
 		help='Password (can be specified multiple times for threshold mode)',
 	)
-	parser.add_argument(
+	secret_group.add_argument(
 		'--threshold',
 		type=int,
 		help='Threshold for multi-signature mode (e.g., 2 for 2 of 3)',
 	)
-	parser.add_argument(
+	secret_group.add_argument(
 		'--keyfile',
 		required=False,
 		help='Key file path for encryption/decryption (use with or without password)',
 	)
-	parser.add_argument('-c', '--compress', action='store_true', help='Enable compression')
-	parser.add_argument(
-		'--hidden-vol',
-		action='store_true',
-		help='Encrypt decoy (-f) and hidden (--hidden-file) into one container (single file only)',
-	)
-	parser.add_argument(
-		'--hidden-file',
-		help='Hidden payload path (requires --hidden-vol on encrypt)',
-	)
-	parser.add_argument(
-		'--hidden',
-		action='store_true',
-		help='With -d -f, decrypt inner/hidden volume (password is the hidden password)',
-	)
-	parser.add_argument(
+	secret_group.add_argument(
 		'--password-outer',
 		default=None,
 		help='Decoy password for --hidden-vol (optional; exposing via CLI is insecure)',
 	)
-	parser.add_argument(
+	secret_group.add_argument(
 		'--password-hidden',
 		default=None,
 		help='Hidden password for --hidden-vol; with -d --hidden can be used instead of -p',
 	)
-	parser.add_argument(
+
+	file_group = parser.add_argument_group(_help_heading('📦', 'File & Container Behavior'))
+	file_group.add_argument('-c', '--compress', action='store_true', help='Enable compression')
+	file_group.add_argument(
+		'--hidden-vol',
+		action='store_true',
+		help='Encrypt decoy (-f) and hidden (--hidden-file) into one container (single file only)',
+	)
+	file_group.add_argument(
+		'--hidden-file',
+		help='Hidden payload path (requires --hidden-vol on encrypt)',
+	)
+	file_group.add_argument(
+		'--hidden',
+		action='store_true',
+		help='With -d -f, decrypt inner/hidden volume (password is the hidden password)',
+	)
+	file_group.add_argument(
 		'-r',
 		'--recursive',
 		action='store_true',
 		help='Recursively process directories or wildcard patterns (uses ** for subfolders)',
 	)
-	parser.add_argument(
+
+	crypto_group = parser.add_argument_group(_help_heading('🧬', 'Crypto Tuning'))
+	crypto_group.add_argument(
 		'--kdf',
 		choices=['pbkdf2', 'argon2'],
-		default='pbkdf2',
+		default=None,
 		help='Key derivation function: pbkdf2 (default) or argon2 (more secure)',
 	)
-	parser.add_argument(
+	crypto_group.add_argument(
 		'--iterations',
 		type=int,
 		help='Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)',
 	)
-	parser.add_argument('--debug', action='store_true', help='Enable debug mode')
-	parser.add_argument('--log', action='store_true', help='Enable logging to file')
-	parser.add_argument('-v', '--version', action='version', version=Config.VERSION)
 
 	return parser.parse_args(argv)
 
@@ -2067,7 +2331,14 @@ def main(argv=None):
 	Banner.show()
 	# If argv is None, argparse uses sys.argv[1:] automatically.
 	# If argv is passed (from tests), it uses that list.
+	cli_overrides = _detect_cli_overrides(argv)
 	args = parse_args(argv)
+	try:
+		config_path, config_defaults, env_defaults = _load_runtime_defaults(args.config)
+	except ValueError as e:
+		ConsoleLogger.show('error', str(e))
+		sys.exit(1)
+	args = _apply_runtime_defaults(args, cli_overrides, config_defaults, env_defaults)
 	engine = CryptoEngine()
 
 	# Handle key file generation
@@ -2136,6 +2407,8 @@ def main(argv=None):
 	# Record start time
 	start_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
 	ConsoleLogger.show('info', f'Session started at {start_timestamp}', icon='🕐')
+	if config_path:
+		ConsoleLogger.show('info', f'Config file: {config_path}', icon='⚙️')
 
 	# Enable debug mode if --debug flag is set
 	if args.debug:
@@ -2417,6 +2690,10 @@ def main(argv=None):
 	else:
 		ConsoleLogger.show('debug', 'No key file provided')
 
+	args.kdf = args.kdf or 'pbkdf2'
+	if args.kdf not in ['pbkdf2', 'argon2']:
+		ConsoleLogger.show('error', 'Invalid --kdf value. Must be "pbkdf2" or "argon2"')
+		sys.exit(1)
 	kdf_type = Config.KDF_ARGON2 if args.kdf == 'argon2' else Config.KDF_PBKDF2
 	if args.kdf == 'argon2' and not ARGON2_AVAILABLE:
 		ConsoleLogger.show(

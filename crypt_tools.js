@@ -138,7 +138,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.4.1';
+    static VERSION = '2.4.3';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -185,6 +185,115 @@ class TerminalColors {
     static CYAN = '\x1b[96m';
     static MAGENTA = '\x1b[95m';
     static WHITE = '\x1b[97m';
+}
+
+function helpUseColor() {
+    return Boolean(process.stdout.isTTY);
+}
+
+function helpStyle(text, color) {
+    if (!helpUseColor()) {
+        return text;
+    }
+    return `${color}${text}${TerminalColors.RESET}`;
+}
+
+function helpHeading(icon, title, color = TerminalColors.CYAN) {
+    return helpStyle(`${icon} ${title}`, color);
+}
+
+function renderHelpSection(title, options) {
+    const width = options.reduce((max, option) => Math.max(max, option.flags.length), 0);
+    const lines = [helpHeading(...title)];
+    for (const option of options) {
+        const flags = helpStyle(option.flags.padEnd(width), TerminalColors.WHITE);
+        lines.push(`  ${flags}  ${option.description}`);
+    }
+    return lines.join('\n');
+}
+
+function renderNodeHelp(cmd) {
+    const sections = [
+        [
+            ['🎯', 'Modes'],
+            ['-e, --encrypt', 'Encrypt mode (default)'],
+            ['-d, --decrypt', 'Decrypt mode'],
+            ['--inspect', 'Inspect encrypted file metadata'],
+        ],
+        [
+            ['📥', 'Input & Output'],
+            ['-t, --text <text>', 'Text to process'],
+            ['-f, --file <path>', 'File path, directory, or wildcard pattern'],
+            ['-o, --output <path>', 'Output file path'],
+            ['--config <path>', 'Path to a config file; defaults are auto-discovered'],
+        ],
+        [
+            ['🔑', 'Passwords & Secrets'],
+            ['-p, --password <password>', 'Password (repeat for threshold mode)'],
+            ['--threshold <number>', 'Threshold for multi-signature mode'],
+            ['--keyfile <path>', 'Key file path for encryption/decryption'],
+            ['--password-outer <password>', 'Decoy password for --hidden-vol'],
+            ['--password-hidden <password>', 'Hidden password for --hidden-vol / --hidden'],
+        ],
+        [
+            ['📦', 'File & Container Behavior'],
+            ['-c, --compress', 'Enable compression'],
+            ['-r, --recursive', 'Recursively process directories or wildcard patterns'],
+            ['--hidden-vol', 'Encrypt decoy and hidden payload into one container'],
+            ['--hidden-file <path>', 'Hidden payload path (requires --hidden-vol)'],
+            ['--hidden', 'Decrypt inner/hidden volume in decrypt mode'],
+        ],
+        [
+            ['🧬', 'Crypto Tuning'],
+            ['--kdf <type>', 'Key derivation function: pbkdf2 or argon2'],
+            ['--iterations <count>', 'Number of KDF iterations'],
+        ],
+        [
+            ['🛠️', 'Utility'],
+            ['--generate-keyfile <path>', 'Generate a random key file and exit'],
+            ['--debug', 'Enable debug mode'],
+            ['--log', 'Enable logging to file'],
+            ['-V, --version', 'Show version'],
+            ['-h, --help', 'Show help'],
+        ],
+    ];
+
+    const renderedSections = sections.map(([title, ...options]) =>
+        renderHelpSection(title, options.map(([flags, description]) => ({ flags, description })))
+    );
+
+    return [
+        helpHeading('🔐', 'Crypt Tools Help'),
+        helpStyle('Beautiful, secure AES-GCM encryption for files and text.', TerminalColors.WHITE),
+        '',
+        helpHeading('🚀', 'Usage'),
+        '  crypt_tools.js [options]',
+        '',
+        renderedSections.join('\n\n'),
+        '',
+        helpHeading('✨', 'Tips'),
+        '  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively',
+        '    (equivalent to .\\temp\\**\\*.txt).',
+        '  - Password prompts show a live strength indicator.',
+        '  - Key file support: combine password + keyfile for two-factor encryption.',
+        '  - Hidden volumes use two CT02 blobs plus a visible CTHV footer.',
+        '',
+        helpHeading('🌍', 'Environment Variables'),
+        '  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,',
+        '  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,',
+        '  CRYPT_TOOLS_LOG_ENABLED, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_DEBUG_ENABLED,',
+        '  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD,',
+        '  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN',
+        '',
+        helpHeading('⚙️', 'Config Keys'),
+        '  compress, compression, default_compression, kdf, default_kdf,',
+        '  iterations, default_iterations, log, logging, log_enabled,',
+        '  debug, debug_enabled, password, default_password,',
+        '  password_outer, default_password_outer,',
+        '  password_hidden, default_password_hidden,',
+        '  keyfile, default_keyfile, threshold',
+        '',
+    ].join('\n');
 }
 
 let nonTtyPasswordLinesPromise = null;
@@ -368,6 +477,262 @@ function singlePasswordArg(passwordValue) {
         return passwordValue[0] || '';
     }
     return passwordValue || '';
+}
+
+const CONFIG_FILENAMES = [
+    '.crypt_tools.conf',
+    '.crypt_tools.json',
+    '.crypt_tools.yml',
+    '.crypt_tools.yaml',
+];
+
+const CONFIG_KEY_ALIASES = {
+    compress: 'compress',
+    compression: 'compress',
+    default_compression: 'compress',
+    kdf: 'kdf',
+    default_kdf: 'kdf',
+    iterations: 'iterations',
+    default_iterations: 'iterations',
+    log: 'log',
+    logging: 'log',
+    log_enabled: 'log',
+    debug: 'debug',
+    debug_enabled: 'debug',
+    password: 'password',
+    default_password: 'password',
+    password_outer: 'passwordOuter',
+    default_password_outer: 'passwordOuter',
+    password_hidden: 'passwordHidden',
+    default_password_hidden: 'passwordHidden',
+    keyfile: 'keyfile',
+    default_keyfile: 'keyfile',
+    threshold: 'threshold',
+};
+
+const ENV_KEY_ALIASES = {
+    CRYPT_TOOLS_COMPRESS: 'compress',
+    CRYPT_TOOLS_COMPRESSION: 'compress',
+    CRYPT_TOOLS_KDF: 'kdf',
+    CRYPT_TOOLS_ITERATIONS: 'iterations',
+    CRYPT_TOOLS_LOG: 'log',
+    CRYPT_TOOLS_LOG_ENABLED: 'log',
+    CRYPT_TOOLS_DEBUG: 'debug',
+    CRYPT_TOOLS_DEBUG_ENABLED: 'debug',
+    CRYPT_TOOLS_PASSWORD: 'password',
+    CRYPT_TOOLS_PASSWORD_OUTER: 'passwordOuter',
+    CRYPT_TOOLS_PASSWORD_HIDDEN: 'passwordHidden',
+    CRYPT_TOOLS_KEYFILE: 'keyfile',
+    CRYPT_TOOLS_THRESHOLD: 'threshold',
+};
+
+const CLI_OPTION_ALIASES = {
+    '--compress': 'compress',
+    '-c': 'compress',
+    '--kdf': 'kdf',
+    '--iterations': 'iterations',
+    '--log': 'log',
+    '--debug': 'debug',
+    '-p': 'password',
+    '--password': 'password',
+    '--password-outer': 'passwordOuter',
+    '--password-hidden': 'passwordHidden',
+    '--keyfile': 'keyfile',
+    '--threshold': 'threshold',
+    '--config': 'config',
+};
+
+function normalizeConfigKey(rawKey) {
+    return CONFIG_KEY_ALIASES[String(rawKey).trim().toLowerCase().replace(/-/g, '_')];
+}
+
+function parseBool(value) {
+    if (typeof value === 'boolean') {
+        return value;
+    }
+    if (typeof value === 'number') {
+        return value !== 0;
+    }
+    const normalized = String(value).trim().toLowerCase();
+    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+        return true;
+    }
+    if (['0', 'false', 'no', 'off'].includes(normalized)) {
+        return false;
+    }
+    throw new Error(`Invalid boolean value: ${value}`);
+}
+
+function coerceConfigValue(key, value) {
+    if (['compress', 'log', 'debug'].includes(key)) {
+        return parseBool(value);
+    }
+    if (['iterations', 'threshold'].includes(key)) {
+        return Number.parseInt(value, 10);
+    }
+    if (key === 'kdf') {
+        return String(value).trim().toLowerCase();
+    }
+    if (['password', 'passwordOuter', 'passwordHidden', 'keyfile'].includes(key)) {
+        return String(value);
+    }
+    return value;
+}
+
+function parseSimpleYaml(content) {
+    const data = {};
+    for (const line of content.split(/\r?\n/)) {
+        const stripped = line.trim();
+        if (!stripped || stripped.startsWith('#')) {
+            continue;
+        }
+        const separator = stripped.indexOf(':');
+        if (separator === -1) {
+            throw new Error(`Invalid YAML line: ${line}`);
+        }
+        const key = stripped.slice(0, separator).trim();
+        const rawValue = stripped.slice(separator + 1).trim();
+        data[key] = rawValue;
+    }
+    return data;
+}
+
+function parseSimpleConf(content) {
+    const data = {};
+    for (const line of content.split(/\r?\n/)) {
+        const stripped = line.trim();
+        if (!stripped || stripped.startsWith('#') || stripped.startsWith(';')) {
+            continue;
+        }
+        const eqIndex = stripped.indexOf('=');
+        const colonIndex = stripped.indexOf(':');
+        const separatorIndex = eqIndex >= 0 ? eqIndex : colonIndex;
+        if (separatorIndex === -1) {
+            throw new Error(`Invalid config line: ${line}`);
+        }
+        const key = stripped.slice(0, separatorIndex).trim();
+        const rawValue = stripped.slice(separatorIndex + 1).trim();
+        data[key] = rawValue;
+    }
+    return data;
+}
+
+function readConfigFile(configPath) {
+    const ext = path.extname(configPath).toLowerCase();
+    const content = fs.readFileSync(configPath, 'utf8');
+    let parsed;
+    if (ext === '.json') {
+        parsed = JSON.parse(content);
+    } else if (ext === '.yml' || ext === '.yaml') {
+        parsed = parseSimpleYaml(content);
+    } else {
+        parsed = parseSimpleConf(content);
+    }
+
+    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+        throw new Error('Configuration file must contain a top-level object');
+    }
+
+    const normalized = {};
+    for (const [rawKey, rawValue] of Object.entries(parsed)) {
+        const key = normalizeConfigKey(rawKey);
+        if (!key) {
+            continue;
+        }
+        normalized[key] = coerceConfigValue(key, rawValue);
+    }
+    return normalized;
+}
+
+function discoverConfigPath(explicitPath) {
+    if (explicitPath) {
+        return { path: explicitPath, explicit: true };
+    }
+
+    for (const filename of CONFIG_FILENAMES) {
+        const candidate = path.join(process.cwd(), filename);
+        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+            return { path: candidate, explicit: false };
+        }
+    }
+    return { path: null, explicit: false };
+}
+
+function loadRuntimeDefaults(explicitConfigPath) {
+    const configInfo = discoverConfigPath(explicitConfigPath);
+    let configDefaults = {};
+    if (configInfo.path) {
+        try {
+            configDefaults = readConfigFile(configInfo.path);
+        } catch (err) {
+            throw new Error(`Failed to load config file ${configInfo.path}: ${err.message}`);
+        }
+    } else if (configInfo.explicit) {
+        throw new Error(`Config file not found: ${explicitConfigPath}`);
+    }
+
+    const envDefaults = {};
+    for (const [envKey, normalizedKey] of Object.entries(ENV_KEY_ALIASES)) {
+        const rawValue = process.env[envKey];
+        if (rawValue === undefined || rawValue === '') {
+            continue;
+        }
+        envDefaults[normalizedKey] = coerceConfigValue(normalizedKey, rawValue);
+    }
+
+    return { configPath: configInfo.path, configDefaults, envDefaults };
+}
+
+function detectCliOverrides(argv) {
+    const overrides = new Set();
+    for (const token of argv) {
+        if (token.startsWith('--')) {
+            const flag = token.split('=', 1)[0];
+            const normalized = CLI_OPTION_ALIASES[flag];
+            if (normalized) {
+                overrides.add(normalized);
+            }
+        } else if (CLI_OPTION_ALIASES[token]) {
+            overrides.add(CLI_OPTION_ALIASES[token]);
+        }
+    }
+    return overrides;
+}
+
+function applyRuntimeDefaults(options, cliOverrides, configDefaults, envDefaults) {
+    const mergedDefaults = { ...configDefaults, ...envDefaults };
+
+    if (!cliOverrides.has('password') && (!options.password || options.password.length === 0) && mergedDefaults.password !== undefined) {
+        options.password = Array.isArray(mergedDefaults.password) ? [...mergedDefaults.password] : [mergedDefaults.password];
+    }
+
+    for (const attr of ['passwordOuter', 'passwordHidden', 'keyfile', 'threshold']) {
+        if (cliOverrides.has(attr)) {
+            continue;
+        }
+        if ((options[attr] === undefined || options[attr] === null) && mergedDefaults[attr] !== undefined) {
+            options[attr] = mergedDefaults[attr];
+        }
+    }
+
+    for (const attr of ['compress', 'log', 'debug']) {
+        if (cliOverrides.has(attr)) {
+            continue;
+        }
+        if (mergedDefaults[attr] !== undefined) {
+            options[attr] = Boolean(mergedDefaults[attr]);
+        }
+    }
+
+    if (!cliOverrides.has('kdf') && options.kdf === undefined && mergedDefaults.kdf !== undefined) {
+        options.kdf = mergedDefaults.kdf;
+    }
+
+    if (!cliOverrides.has('iterations') && options.iterations === undefined && mergedDefaults.iterations !== undefined) {
+        options.iterations = mergedDefaults.iterations;
+    }
+
+    return options;
 }
 
 function logCompletionSummary(isDecrypt, successCount, totalOps, elapsedSec) {
@@ -1672,6 +2037,9 @@ async function main() {
     program
         .description(Config.DESCRIPTION)
         .version(Config.VERSION)
+        .configureHelp({
+            formatHelp: (cmd) => renderNodeHelp(cmd),
+        })
         .option('-e, --encrypt', 'Encrypt mode (default)', true)
         .option('-d, --decrypt', 'Decrypt mode', false)
         .option('--inspect', 'Inspect encrypted file metadata', false)
@@ -1679,6 +2047,7 @@ async function main() {
         .option('-t, --text <text>', 'Text to process')
         .option('-f, --file <path>', 'File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
         .option('-o, --output <path>', 'Output file path')
+        .option('--config <path>', 'Path to a config file (.conf, .json, .yml, .yaml); defaults are auto-discovered')
         .option('-p, --password <password>', 'Password (can be specified multiple times for threshold mode)', (val, arr) => [...arr, val], [])
         .option('--threshold <number>', 'Threshold for multi-signature mode (e.g., 2 for 2 of 3)', parseInt)
         .option('--keyfile <path>', 'Key file path for encryption/decryption (use with or without password)')
@@ -1689,21 +2058,10 @@ async function main() {
         .option('--password-outer <password>', 'Decoy password for --hidden-vol (optional; exposing via CLI is insecure)')
         .option('--password-hidden <password>', 'Hidden password for --hidden-vol; with -d --hidden can be used instead of -p')
         .option('-r, --recursive', 'Recursively process directories or wildcard patterns (uses ** for subfolders)', false)
-        .option('--kdf <type>', 'Key derivation function: pbkdf2 (default) or argon2 (more secure)', 'pbkdf2')
+        .option('--kdf <type>', 'Key derivation function: pbkdf2 (default) or argon2 (more secure)')
         .option('--iterations <count>', 'Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)', parseInt)
         .option('--debug', 'Enable debug mode', false)
-        .option('--log', 'Enable logging to file', false)
-        .addHelpText('after',
-            '\nNotes:\n' +
-            '  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively\n' +
-            '    (equivalent to .\\temp\\**\\*.txt).\n' +
-            '  - Password prompts show a live strength indicator.\n' +
-            '  - Key file support: Use --keyfile to encrypt/decrypt with a key file.\n' +
-            '    Combining password + keyfile provides two-factor encryption.\n' +
-            '  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.\n' +
-            '    This is not identical to VeraCrypt: the footer and extra length are visible forensically;\n' +
-            '    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”'
-        );
+        .option('--log', 'Enable logging to file', false);
 
     // Show banner for help/version
     const helpOrVersion = process.argv.includes('-h') || process.argv.includes('--help') || process.argv.includes('-V') || process.argv.includes('--version');
@@ -1711,8 +2069,20 @@ async function main() {
         Banner.show();
     }
 
+    const rawArgv = process.argv.slice(2);
+    const cliOverrides = detectCliOverrides(rawArgv);
     program.parse(process.argv);
     const options = program.opts();
+    let configPath;
+    try {
+        const defaults = loadRuntimeDefaults(options.config);
+        configPath = defaults.configPath;
+        applyRuntimeDefaults(options, cliOverrides, defaults.configDefaults, defaults.envDefaults);
+    } catch (err) {
+        Banner.show();
+        ConsoleLogger.show('error', err.message);
+        process.exit(1);
+    }
 
     // Handle key file generation
     if (options.generateKeyfile) {
@@ -1795,6 +2165,9 @@ async function main() {
     // Record start time
     const startTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
     ConsoleLogger.show('info', `Session started at ${startTimestamp}`, '🕐');
+    if (configPath) {
+        ConsoleLogger.show('info', `Config file: ${configPath}`, '⚙️');
+    }
 
     // Enable debug mode if --debug flag is set
     if (options.debug) {
@@ -1991,6 +2364,7 @@ async function main() {
     }
 
     // Handle KDF selection
+    options.kdf = options.kdf || 'pbkdf2';
     if (options.kdf && !['pbkdf2', 'argon2'].includes(options.kdf)) {
         ConsoleLogger.show('error', 'Invalid --kdf value. Must be "pbkdf2" or "argon2"');
         process.exit(1);

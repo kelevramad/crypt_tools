@@ -66,6 +66,37 @@ test('decrypts text with invalid base64 fails', () => {
   assert.match(dec.stdout + dec.stderr, /Decryption failed/);
 });
 
+test('loads config defaults for password and kdf', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-config-'));
+  const configPath = path.join(tmp, '.crypt_tools.json');
+  fs.writeFileSync(configPath, JSON.stringify({
+    default_password: 'config-pass',
+    default_kdf: 'argon2',
+    iterations: 3,
+  }), 'utf8');
+
+  const res = runCLI(['-t', 'hello'], { cwd: tmp, env: { HOME: tmp, USERPROFILE: tmp } });
+  assert.equal(res.code, 0, res.stdout + res.stderr);
+  assert.match(res.stdout, /Config file:/);
+  assert.match(res.stdout, /KDF: argon2 \(3 iterations\)/);
+  assert.match(res.stdout, /Encrypted \(Base64\):/);
+});
+
+test('uses password from CRYPT_TOOLS_PASSWORD', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-env-'));
+  const res = runCLI(['-t', 'hello'], {
+    cwd: tmp,
+    env: {
+      HOME: tmp,
+      USERPROFILE: tmp,
+      CRYPT_TOOLS_PASSWORD: 'env-pass',
+    },
+  });
+
+  assert.equal(res.code, 0, res.stdout + res.stderr);
+  assert.match(res.stdout, /Encrypted \(Base64\):/);
+});
+
 test('rejects multiple passwords without threshold', () => {
   const res = runCLI(['-t', 'hello', '-p', 'pass1', '-p', 'pass2']);
   assert.equal(res.code, 1);
@@ -727,7 +758,6 @@ test('inspect shows argon2 kdf', () => {
     fs.rmSync(tmpDir, { recursive: true, force: true });
   }
 });
-
 
 
 

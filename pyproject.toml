@@ -1,6 +1,6 @@
 [project]
 name = "crypt-tools"
-version = "0.1.0"
+version = "2.4.3"
 description = "Crypt Tools"
 readme = "README.md"
 requires-python = ">=3.13"

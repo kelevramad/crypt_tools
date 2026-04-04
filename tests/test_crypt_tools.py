@@ -2,6 +2,7 @@ import os
 import pytest
 import tempfile
 import base64
+import json
 import crypt_tools
 import io
 import runpy
@@ -463,6 +464,44 @@ def test_cli_decrypt_reports_compression_from_file_header(capsys, engine):
 
 	captured = capsys.readouterr()
 	assert 'Compression: enabled' in captured.out
+
+
+def test_cli_uses_config_defaults(monkeypatch, capsys, tmp_path):
+	"""CLI should load password and KDF defaults from a config file."""
+	monkeypatch.chdir(tmp_path)
+	monkeypatch.setenv('HOME', str(tmp_path))
+	monkeypatch.setenv('USERPROFILE', str(tmp_path))
+	config_path = tmp_path / '.crypt_tools.json'
+	config_path.write_text(
+		json.dumps(
+			{
+				'default_password': 'config-pass',
+				'default_kdf': 'argon2',
+				'iterations': 3,
+			}
+		),
+		encoding='utf-8',
+	)
+
+	main(['--encrypt', '-t', 'hello'])
+
+	captured = capsys.readouterr()
+	assert f'Config file: {config_path}' in captured.out
+	assert 'KDF: argon2 (3 iterations)' in captured.out
+	assert 'Encrypted (Base64):' in captured.out
+
+
+def test_cli_uses_password_from_env(monkeypatch, capsys, tmp_path):
+	"""CLI should accept CRYPT_TOOLS_PASSWORD for non-interactive runs."""
+	monkeypatch.chdir(tmp_path)
+	monkeypatch.setenv('HOME', str(tmp_path))
+	monkeypatch.setenv('USERPROFILE', str(tmp_path))
+	monkeypatch.setenv('CRYPT_TOOLS_PASSWORD', 'env-pass')
+
+	main(['--encrypt', '-t', 'hello'])
+
+	captured = capsys.readouterr()
+	assert 'Encrypted (Base64):' in captured.out
 
 
 def test_recursive_directory(engine):

@@ -1,0 +1,6 @@
+# Copy this file to .crypt_tools.yml in your working directory to enable defaults.
+default_compression: true
+default_kdf: pbkdf2
+iterations: 100000
+log_enabled: true
+

@@ -11,6 +11,7 @@
 - **CLI Interface**: Easy-to-use command line interface for quick operations.
 - **Visual Feedback**: Colorful terminal output with emojis, color-coded status messages, and ASCII art banners.
 - **File Logging**: Optional timestamped log file (`crypt_tools.log`) for audit trails.
+- **Configurable Defaults**: Load common CLI defaults from `.crypt_tools.conf`, `.crypt_tools.json`, `.crypt_tools.yml`, or `.crypt_tools.yaml`.
 - **Secure Defaults**: Automatically handles Nonce generation and Salt management.
 - **File Pattern Expansion**: Encrypt/decrypt groups of files via wildcards (e.g., `*.md`, `crypt*.*`).
 - **Password Strength Indicator**: Live strength and character-class feedback during input.
@@ -75,6 +76,98 @@ uv run crypt_tools.py --decrypt -f document.enc -p "your_password" -c
 ```
 
 For new `CT02` files, compression is detected automatically during decryption. The `-c/--compress` flag is only needed for legacy files created before the versioned header was introduced.
+
+### Configuration File Defaults
+Store repeated defaults in a config file in the current working directory, or pass one explicitly with `--config`.
+
+Supported filenames:
+- `.crypt_tools.conf`
+- `.crypt_tools.json`
+- `.crypt_tools.yml`
+- `.crypt_tools.yaml`
+
+Supported keys:
+- `compress`
+- `compression`
+- `default_compression`
+- `kdf`
+- `default_kdf`
+- `iterations`
+- `default_iterations`
+- `log`
+- `logging`
+- `log_enabled`
+- `debug`
+- `debug_enabled`
+- `password`
+- `default_password`
+- `password_outer`
+- `default_password_outer`
+- `password_hidden`
+- `default_password_hidden`
+- `keyfile`
+- `default_keyfile`
+- `threshold`
+
+Example YAML:
+```yaml
+default_compression: true
+default_kdf: pbkdf2
+iterations: 100000
+log_enabled: true
+```
+
+Example JSON:
+```json
+{
+  "default_password": "ci-secret",
+  "default_kdf": "argon2",
+  "iterations": 3
+}
+```
+
+Example usage:
+```bash
+# Auto-discover .crypt_tools.yml in the current folder
+uv run crypt_tools.py --encrypt -f document.txt
+
+# Use an explicit config file
+uv run crypt_tools.py --config .\team-defaults.json --encrypt -f document.txt
+```
+
+Ready-to-copy examples are included at [`.crypt_tools.yml.example`](C:/Git/KelevraMad/crypt_tools/.crypt_tools.yml.example) and [`.crypt_tools.conf.example`](C:/Git/KelevraMad/crypt_tools/.crypt_tools.conf.example).
+
+### Environment Variables
+Environment variables are useful for CI/CD or shell sessions where you do not want to repeat common flags.
+
+Common variables:
+- `CRYPT_TOOLS_PASSWORD`
+- `CRYPT_TOOLS_COMPRESS`
+- `CRYPT_TOOLS_COMPRESSION`
+- `CRYPT_TOOLS_KDF`
+- `CRYPT_TOOLS_ITERATIONS`
+- `CRYPT_TOOLS_LOG`
+- `CRYPT_TOOLS_LOG_ENABLED`
+- `CRYPT_TOOLS_DEBUG`
+- `CRYPT_TOOLS_DEBUG_ENABLED`
+- `CRYPT_TOOLS_KEYFILE`
+- `CRYPT_TOOLS_THRESHOLD`
+- `CRYPT_TOOLS_PASSWORD_OUTER`
+- `CRYPT_TOOLS_PASSWORD_HIDDEN`
+
+Example:
+```bash
+$env:CRYPT_TOOLS_PASSWORD="build-secret"
+$env:CRYPT_TOOLS_KDF="argon2"
+$env:CRYPT_TOOLS_ITERATIONS="3"
+uv run crypt_tools.py --encrypt -t "Secret Message"
+```
+
+Precedence order:
+- Explicit CLI flags
+- Environment variables
+- Config file defaults
+- Built-in defaults
 
 ### Inspect an Encrypted File
 Inspect metadata stored in an encrypted file without prompting for a password.
@@ -183,6 +276,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 | `--text` | `-t` | Text to process |
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |
+| `--config` | — | Config file path for CLI defaults |
 | `--password` | `-p` | Password (optional, will prompt if missing) |
 | `--keyfile` | — | Key file path for encryption/decryption |
 | `--compress` | `-c` | Enable compression |
@@ -209,6 +303,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ### File Logging
 - Use `--log` flag to enable logging to `crypt_tools.log`
+- Or set `log_enabled: true` in config / `CRYPT_TOOLS_LOG_ENABLED=true` in the environment
 - Log entries include timestamps, log level, emoji icons, and operation details
 - Useful for audit trails and debugging
 - Log file accumulates entries; manual cleanup may be required
@@ -222,7 +317,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.4.1 Specifications
+### Version 2.4.3 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -343,4 +438,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.4.1
+**Version**: 2.4.3

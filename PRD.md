@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.4.1 |
+| **Version** | 2.4.3 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -50,6 +50,8 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **Password Strength Indicator** | Live strength and character-class feedback during input |
 | **Visual Feedback** | Progress bars, color-coded logs with emojis, ASCII banners |
 | **File Logging** | Optional timestamped log file for audit trail |
+| **Configuration File Defaults** | Load common defaults from `.crypt_tools.conf`, `.crypt_tools.json`, `.crypt_tools.yml`, or `.crypt_tools.yaml` |
+| **Environment Variable Defaults** | Support `CRYPT_TOOLS_PASSWORD`, `CRYPT_TOOLS_KDF`, `CRYPT_TOOLS_ITERATIONS`, and related CLI defaults |
 | **Key File Support** | Generate and use key files for two-factor encryption |
 | **Hidden volumes (containers)** | Optional two-layer file: decoy payload (outer password) + real payload (hidden password); `CTHV` footer marks split; file-only, not full-disk VeraCrypt semantics |
 
@@ -143,6 +145,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--text` | `-t` | Text to process | None |
 | `--file` | `-f` | Input file/directory path or wildcard pattern (e.g., `*.md`, `tests\\*.pyc`) | Required |
 | `--output` | `-o` | Output file path | Auto-generated |
+| `--config` | — | Config file path for CLI defaults | Auto-discover in current working directory |
 | `--password` | `-p` | Password | Interactive prompt |
 | `--keyfile` | — | Key file path for encryption/decryption | None |
 | `--compress` | `-c` | Enable zlib compression | Disabled |
@@ -185,6 +188,18 @@ uv run crypt_tools.py --inspect -f document.enc
 
 # Enable file logging
 uv run crypt_tools.py --encrypt -f document.txt -p "password" --log
+
+# Encrypt using a discovered config file in the current directory
+uv run crypt_tools.py --encrypt -f document.txt
+
+# Encrypt using an explicit config file
+uv run crypt_tools.py --config .\team-defaults.json --encrypt -f document.txt
+
+# Encrypt using environment variable defaults
+$env:CRYPT_TOOLS_PASSWORD="password"
+$env:CRYPT_TOOLS_KDF="argon2"
+$env:CRYPT_TOOLS_ITERATIONS="3"
+uv run crypt_tools.py --encrypt -t "Secret Message"
 
 # Encrypt a group of files by pattern
 uv run crypt_tools.py --encrypt -f "*.md" -p "password"
@@ -239,6 +254,8 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "real_pw" -o recove
 | Compression | ✓ Size reduction verification |
 | CLI Integration | ✓ Argument parsing, password prompts |
 | Password Mismatch | ✓ Exit on verification failure |
+| Config file defaults | ✓ Auto-discovery, explicit `--config`, and precedence behavior |
+| Environment variable defaults | ✓ Password/KDF/iteration defaults for non-interactive usage |
 | Recursive Processing | ✓ Directory tree handling |
 | Hidden-volume containers | ✓ Round-trip outer/hidden, footer parse, inspect metadata |
 
@@ -281,6 +298,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 | **Interactive Mode** | Requires terminal for password prompts |
 | **Memory** | Chunk-based but requires ~64KB buffer |
 | **Log File** | Log file accumulates entries; manual cleanup required |
+| **Config Parser Scope** | YAML support is intentionally limited to flat `key: value` pairs; nested YAML is not supported |
 | **Hidden volumes** | `--hidden-vol` is single-file only; no wildcards or `--recursive`; footer is visible forensically |
 
 ---
@@ -289,6 +307,8 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Feature | Priority | Description |
 |---------|----------|-------------|
+| Interactive File Selection | Low | Add a TUI browser for selecting files/directories |
+| QR Code Output | Low | Render encrypted text as a QR code for air-gapped transfer |
 | GUI Interface | Low | Desktop application wrapper |
 | Multi-threading | Low | Parallel file processing |
 | Cloud Integration | Low | Direct S3/Drive encryption |
@@ -299,6 +319,8 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.4.3 | 2026-04-03 | Added grouped/colorized CLI help, expanded `--help` with environment variables and config keys, and normalized release versions across scripts, docs, and package metadata |
+| 2.4.2 | 2026-04-03 | Added configuration-file defaults (`--config`, `.crypt_tools.{conf,json,yml,yaml}`), environment-variable defaults (`CRYPT_TOOLS_*`), README examples, and sample config templates |
 | 2.4.1 | 2026-04-03 | Inlined Shamir logic into the CLI scripts, fixed threshold password prompting and compressed threshold decryption, and expanded inspect output for threshold files and hidden containers |
 | 2.4.0 | 2026-03-28 | Hidden-volume containers (`--hidden-vol`, `--hidden-file`, `-d --hidden`, `CTHV` footer), `decrypt_file` byte-range slices, inspect reports container metadata; Python and Node parity |
 | 2.3.0 | 2026-03-27 | Version bump for development |
@@ -331,5 +353,5 @@ crypt_tools/
 
 ---
 
-**Document Version:** 1.4
-**Last Updated:** March 28, 2026
+**Document Version:** 1.5
+**Last Updated:** April 3, 2026
