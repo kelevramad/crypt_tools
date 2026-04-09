@@ -673,6 +673,22 @@ test('generate-keyfile creates key file', () => {
   }
 });
 
+test('generate-keyfile uses default name key.txt when no path provided', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+  const defaultKeyfilePath = path.join(tmpDir, 'key.txt');
+
+  try {
+    const result = runCLI(['--generate-keyfile'], { cwd: tmpDir });
+    assert.strictEqual(result.code, 0, 'should exit with code 0');
+    assert.ok(fs.existsSync(defaultKeyfilePath), 'key.txt should exist in cwd');
+    const recoveryKey = fs.readFileSync(defaultKeyfilePath, 'utf8').trim();
+    assert.match(recoveryKey, /^[A-Za-z0-9_-]+$/);
+    assert.strictEqual(recoveryKey.length, 22, 'recovery key should be 22 chars for 16 bytes');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
 test('encrypts and decrypts file with keyfile', () => {
   const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
 

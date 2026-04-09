@@ -1679,6 +1679,23 @@ def test_cli_generate_keyfile(tmp_path):
 	assert len(content) == 22
 
 
+def test_cli_generate_keyfile_default_name(tmp_path):
+	"""Test that --generate-keyfile without argument uses key.txt as default."""
+	import os
+	original_cwd = os.getcwd()
+	try:
+		os.chdir(tmp_path)
+		with pytest.raises(SystemExit):
+			main(['--generate-keyfile'])
+		default_keyfile = tmp_path / 'key.txt'
+		assert default_keyfile.exists()
+		content = default_keyfile.read_text(encoding='utf-8').strip()
+		assert re.fullmatch(r'[A-Za-z0-9_-]+', content)
+		assert len(content) == 22
+	finally:
+		os.chdir(original_cwd)
+
+
 def test_cli_encrypt_with_keyfile(tmp_path):
 	from crypt_tools import generate_keyfile
 
