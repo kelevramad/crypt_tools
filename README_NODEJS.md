@@ -224,7 +224,10 @@ node crypt_tools.js --decrypt --select -f .\\documents -p "your_password"
 ### Key File Support
 Generate and use key files for two-factor encryption (password + key file):
 ```bash
-# Generate a random 32-byte key file
+# Generate a random 32-byte key file (uses default name: key.txt)
+node crypt_tools.js --generate-keyfile
+
+# Generate a key file with custom name
 node crypt_tools.js --generate-keyfile mykey.txt
 
 # Encrypt with key file only (no password)
@@ -277,7 +280,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 | `--encrypt` | `-e` | Encrypt mode (default) |
 | `--decrypt` | `-d` | Decrypt mode |
 | `--inspect` | — | Inspect encrypted file metadata |
-| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key |
+| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key (default: `key.txt`) |
 | `--text` | `-t` | Text to process |
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |

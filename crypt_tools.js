@@ -2221,7 +2221,7 @@ async function main() {
         .option('-e, --encrypt', 'Encrypt mode (default)', true)
         .option('-d, --decrypt', 'Decrypt mode', false)
         .option('--inspect', 'Inspect encrypted file metadata', false)
-        .option('--generate-keyfile <path>', 'Generate a random key file and exit')
+        .option('--generate-keyfile [path]', 'Generate a random key file and exit (default: key.txt)')
         .option('-t, --text <text>', 'Text to process')
         .option('-f, --file <path>', 'File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
         .option('-o, --output <path>', 'Output file path')
@@ -2266,7 +2266,8 @@ async function main() {
 
     // Handle key file generation
     if (options.generateKeyfile) {
-        if (generateKeyfile(options.generateKeyfile)) {
+        const keyfilePath = options.generateKeyfile === true ? 'key.txt' : options.generateKeyfile;
+        if (generateKeyfile(keyfilePath)) {
             process.exit(0);
         } else {
             process.exit(1);

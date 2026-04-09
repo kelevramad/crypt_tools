@@ -1459,7 +1459,7 @@ class CryptoEngine:
 		"""Create [CT02_outer][CT02_hidden][CTHV][uint64 outer_len]."""
 		tmp_outer = None
 		tmp_hidden = None
-		try:
+		try:	
 			fd_o, tmp_outer = tempfile.mkstemp(prefix='ct_outer_', suffix='.enc')
 			os.close(fd_o)
 			fd_h, tmp_hidden = tempfile.mkstemp(prefix='ct_hidden_', suffix='.enc')
@@ -2369,7 +2369,8 @@ def parse_args(argv=None):
 	)
 	utility_group = parser.add_argument_group(_help_heading('🛠️', 'Utility'))
 	utility_group.add_argument(
-		'--generate-keyfile', dest='generate_keyfile', help='Generate a random key file and exit'
+		'--generate-keyfile', dest='generate_keyfile', nargs='?', const='key.txt',
+		help='Generate a random key file and exit (default: key.txt)'
 	)
 	utility_group.add_argument('--debug', action='store_true', help='Enable debug mode')
 	utility_group.add_argument('--log', action='store_true', help='Enable logging to file')

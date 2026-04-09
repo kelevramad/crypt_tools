@@ -227,7 +227,10 @@ uv run crypt_tools.py --decrypt --select -f .\\documents -p "your_password"
 ### Key File Support
 Generate and use key files for two-factor encryption (password + key file):
 ```bash
-# Generate a random 32-byte key file
+# Generate a random 32-byte key file (uses default name: key.txt)
+uv run crypt_tools.py --generate-keyfile
+
+# Generate a key file with custom name
 uv run crypt_tools.py --generate-keyfile mykey.txt
 
 # Encrypt with key file only (no password)
@@ -294,7 +297,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 | `--encrypt` | `-e` | Encrypt mode (default) |
 | `--decrypt` | `-d` | Decrypt mode |
 | `--inspect` | — | Inspect encrypted file metadata |
-| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key |
+| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key (default: `key.txt`) |
 | `--text` | `-t` | Text to process |
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |
