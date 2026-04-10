@@ -555,7 +555,7 @@ test('recursive decrypt uses .dec for files without extension', () => {
 
   const dec = runCLI(['-r', '-d', '-f', tmp, '-p', 'pw']);
   assert.equal(dec.code, 0);
-  assert.ok(fs.existsSync(path.join(tmp, 'secret.enc.dec')));
+  assert.ok(fs.existsSync(path.join(tmp, 'secret')), 'decrypted file should be named "secret" (original name restored)');
 });
 test('recursive decrypt reports failures but continues', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-'));

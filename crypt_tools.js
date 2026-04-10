@@ -158,7 +158,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.6.1';
+    static VERSION = '2.6.2';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -2772,8 +2772,12 @@ async function main() {
                     // Decrypt mode: Only process .enc files
                     if (!filePath.endsWith('.enc')) continue;
 
-                    let outPath = filePath.slice(0, -4); // Strip .enc
-                    if (outPath === filePath.slice(0, -4) && path.extname(outPath) === '') {
+                    // Use consistent logic: strip .enc if present and not empty, then add .dec
+                    let outPath;
+                    const basename = path.basename(filePath);
+                    if (basename.endsWith('.enc') && basename.length > 4) {
+                        outPath = filePath.slice(0, -4) + '.dec'; // Strip .enc and add .dec
+                    } else {
                         outPath = filePath + '.dec';
                     }
 

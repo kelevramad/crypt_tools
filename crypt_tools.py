@@ -168,7 +168,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.6.1'
+	VERSION = '2.6.2'
 
 	# File format
 	MAGIC = b'CT02'
@@ -2579,7 +2579,7 @@ def main(argv=None):
 		sys.exit(1)
 	if args.select:
 		try:
-			selected_path = interactive_file_selector(args.file or '.')
+			selected_path = UIHelpers.file_selector(args.file or '.')
 		except RuntimeError as e:
 			ConsoleLogger.show('error', str(e))
 			sys.exit(1)
@@ -3136,13 +3136,14 @@ def main(argv=None):
 						else:
 							fail_count += 1
 					else:
-						# Decrypt mode: Only process .enc files (or whatever convention, here simplistic)
+						# Decrypt mode: Only process .enc files
 						if not file.endswith('.enc'):
 							continue
 
-						out_path = os.path.splitext(file_path)[0]  # Strip .enc
-						# If extension was removed and no extension remains, might be an issue, but standard restore.
-						if os.path.splitext(file_path)[0] == file_path:
+						# Use Node.js-style logic: strip .enc if present, then always add .dec
+						if file.endswith('.enc') and len(file) > 4:
+							out_path = file_path[:-4] + '.dec'  # Strip .enc and add .dec
+						else:
 							out_path = file_path + '.dec'
 
 						ConsoleLogger.show('info', f'Processing: {file_path}', icon='📄')
@@ -3215,7 +3216,11 @@ def main(argv=None):
 					if not args.decrypt:
 						output_file = target + '.enc'
 					else:
-						output_file = os.path.splitext(target)[0] + '.dec'
+						# Use Node.js-style logic: strip .enc if present, then always add .dec
+						if target.endswith('.enc') and len(target) > 4:
+							output_file = target[:-4] + '.dec'  # Strip .enc and add .dec
+						else:
+							output_file = target + '.dec'
 				if not args.decrypt:
 					if args.hidden_vol:
 						ok = engine.encrypt_hidden_container(
