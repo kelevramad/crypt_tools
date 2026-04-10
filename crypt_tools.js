@@ -46,8 +46,8 @@ try {
 // Shamir's Secret Sharing
 // =========================
 
-class ShamirSecretSharing {
-    static gfmul(a, b) {
+class GaloisField {
+    static mul(a, b) {
         let result = 0;
         while (b > 0) {
             if (b & 1) result ^= a;
@@ -59,24 +59,26 @@ class ShamirSecretSharing {
         return result;
     }
 
-    static gfexp(base, exp) {
+    static exp(base, exp) {
         let result = 1;
         for (let i = 0; i < exp; i++) {
-            result = this.gfmul(result, base);
+            result = GaloisField.mul(result, base);
         }
         return result;
     }
 
-    static gfinv(a) {
+    static inv(a) {
         if (a === 0) return 0;
-        return this.gfexp(a, 254);
+        return GaloisField.exp(a, 254);
     }
 
-    static gfdiv(a, b) {
+    static div(a, b) {
         if (b === 0) throw new Error('Division by zero');
-        return this.gfmul(a, this.gfinv(b));
+        return GaloisField.mul(a, GaloisField.inv(b));
     }
+}
 
+class ShamirSecretSharing {
     static generateShares(secret, numShares, threshold) {
         if (threshold > numShares) {
             throw new Error('Threshold cannot exceed number of shares');
@@ -102,7 +104,7 @@ class ShamirSecretSharing {
             for (let j = 0; j < secret.length; j++) {
                 let y = secret[j];
                 for (let deg = 1; deg < threshold; deg++) {
-                    y ^= this.gfmul(coeffs[deg - 1], this.gfexp(x, deg));
+                    y ^= GaloisField.mul(coeffs[deg - 1], GaloisField.exp(x, deg));
                 }
                 share[j + 1] = y;
             }
@@ -134,12 +136,12 @@ class ShamirSecretSharing {
                 let den = 1;
                 for (let m = 0; m < shares.length; m++) {
                     if (m !== i) {
-                        num = this.gfmul(num, xVals[m]);
-                        den = this.gfmul(den, xVals[m] ^ xVals[i]);
+                        num = GaloisField.mul(num, xVals[m]);
+                        den = GaloisField.mul(den, xVals[m] ^ xVals[i]);
                     }
                 }
-                const li = this.gfdiv(num, den);
-                result ^= this.gfmul(yVals[i], li);
+                const li = GaloisField.div(num, den);
+                result ^= GaloisField.mul(yVals[i], li);
             }
 
             secret[j] = result;
@@ -156,7 +158,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.6.0';
+    static VERSION = '2.6.1';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -205,288 +207,262 @@ class TerminalColors {
     static WHITE = '\x1b[97m';
 }
 
-function helpUseColor() {
-    return Boolean(process.stdout.isTTY);
-}
-
-function helpStyle(text, color) {
-    if (!helpUseColor()) {
-        return text;
-    }
-    return `${color}${text}${TerminalColors.RESET}`;
-}
-
-function helpHeading(icon, title, color = TerminalColors.CYAN) {
-    return helpStyle(`${icon} ${title}`, color);
-}
-
-function renderHelpSection(title, options) {
-    const width = options.reduce((max, option) => Math.max(max, option.flags.length), 0);
-    const lines = [helpHeading(...title)];
-    for (const option of options) {
-        const flags = helpStyle(option.flags.padEnd(width), TerminalColors.WHITE);
-        lines.push(`  ${flags}  ${option.description}`);
-    }
-    return lines.join('\n');
-}
-
-function renderNodeHelp(cmd) {
-    const sections = [
-        [
-            ['🎯', 'Modes'],
-            ['-e, --encrypt', 'Encrypt mode (default)'],
-            ['-d, --decrypt', 'Decrypt mode'],
-            ['--inspect', 'Inspect encrypted file metadata'],
-        ],
-        [
-            ['📥', 'Input & Output'],
-            ['-t, --text <text>', 'Text to process'],
-            ['-f, --file <path>', 'File path, directory, or wildcard pattern'],
-            ['-o, --output <path>', 'Output file path'],
-            ['--config <path>', 'Path to a config file; defaults are auto-discovered'],
-            ['--select', 'Browse and choose a file or directory interactively'],
-        ],
-        [
-            ['🔑', 'Passwords & Secrets'],
-            ['-p, --password <password>', 'Password (repeat for threshold mode)'],
-            ['--threshold <number>', 'Threshold for multi-signature mode'],
-            ['--keyfile <path>', 'Key file path for encryption/decryption'],
-            ['--password-outer <password>', 'Decoy password for --hidden-vol'],
-            ['--password-hidden <password>', 'Hidden password for --hidden-vol / --hidden'],
-        ],
-        [
-            ['📦', 'File & Container Behavior'],
-            ['-c, --compress', 'Enable compression'],
-            ['-r, --recursive', 'Recursively process directories or wildcard patterns'],
-            ['--hidden-vol', 'Encrypt decoy and hidden payload into one container'],
-            ['--hidden-file <path>', 'Hidden payload path (requires --hidden-vol)'],
-            ['--hidden', 'Decrypt inner/hidden volume in decrypt mode'],
-        ],
-        [
-            ['🧬', 'Crypto Tuning'],
-            ['--kdf <type>', 'Key derivation function: pbkdf2 or argon2'],
-            ['--iterations <count>', 'Number of KDF iterations'],
-            ['--qr', 'Render encrypted text output as a QR code'],
-        ],
-        [
-            ['🛠️', 'Utility'],
-            ['--generate-keyfile <path>', 'Generate a random key file and exit'],
-            ['--debug', 'Enable debug mode'],
-            ['--log', 'Enable logging to file'],
-            ['-V, --version', 'Show version'],
-            ['-h, --help', 'Show help'],
-        ],
-    ];
-
-    const renderedSections = sections.map(([title, ...options]) =>
-        renderHelpSection(title, options.map(([flags, description]) => ({ flags, description })))
-    );
-
-    return [
-        helpHeading('🔐', 'Crypt Tools Help'),
-        helpStyle('Beautiful, secure AES-GCM encryption for files and text.', TerminalColors.WHITE),
-        '',
-        helpHeading('🚀', 'Usage'),
-        '  crypt_tools.js [options]',
-        '',
-        renderedSections.join('\n\n'),
-        '',
-        helpHeading('✨', 'Tips'),
-        '  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively',
-        '    (equivalent to .\\temp\\**\\*.txt).',
-        '  - Password prompts show a live strength indicator.',
-        '  - Key file support: combine password + keyfile for two-factor encryption.',
-        '  - Use --select to browse for a file or directory in an interactive terminal UI.',
-        '  - Use --qr with text encryption to print the encrypted Base64 payload as a QR code.',
-        '  - Hidden volumes use two CT02 blobs plus a visible CTHV footer.',
-        '',
-        helpHeading('🌍', 'Environment Variables'),
-        '  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,',
-        '  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,',
-        '  CRYPT_TOOLS_LOG_ENABLED, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_DEBUG_ENABLED,',
-        '  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD,',
-        '  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN',
-        '',
-        helpHeading('⚙️', 'Config Keys'),
-        '  compress, compression, default_compression, kdf, default_kdf,',
-        '  iterations, default_iterations, log, logging, log_enabled,',
-        '  debug, debug_enabled, password, default_password,',
-        '  password_outer, default_password_outer,',
-        '  password_hidden, default_password_hidden,',
-        '  keyfile, default_keyfile, threshold',
-        '',
-    ].join('\n');
-}
-
-function renderQrCode(data) {
-    if (!QRCODE_AVAILABLE) {
-        throw new Error('QR code support is not available. Please install qrcode-terminal.');
+class UIHelpers {
+    static shouldUseColor() {
+        return Boolean(process.stdout.isTTY);
     }
 
-    return new Promise((resolve) => {
-        qrcodeTerminal.generate(data, { small: true }, (qrText) => {
-            ConsoleLogger.show('info', 'QR Code Output:', '🔳', true, false);
-            process.stdout.write(`${qrText}\n`);
-            resolve(qrText);
-        });
-    });
-}
+    static style(text, color) {
+        if (!UIHelpers.shouldUseColor()) {
+            return text;
+        }
+        return `${color}${text}${TerminalColors.RESET}`;
+    }
 
-function selectPathInteractive(startPath = '.') {
-    if (!BLESSED_AVAILABLE) {
-        return Promise.reject(
-            new Error('Interactive file selection is not available. Please install blessed.')
+    static heading(icon, title, color = TerminalColors.CYAN) {
+        return UIHelpers.style(`${icon} ${title}`, color);
+    }
+
+    static renderHelpSection(title, options) {
+        const width = options.reduce((max, option) => Math.max(max, option.flags.length), 0);
+        const lines = [UIHelpers.heading(...title)];
+        for (const option of options) {
+            const flags = UIHelpers.style(option.flags.padEnd(width), TerminalColors.WHITE);
+            lines.push(`  ${flags}  ${option.description}`);
+        }
+        return lines.join('\n');
+    }
+
+    static renderNodeHelp(cmd) {
+        const sections = [
+            [
+                ['🎯', 'Modes'],
+                ['-e, --encrypt', 'Encrypt mode (default)'],
+                ['-d, --decrypt', 'Decrypt mode'],
+                ['--inspect', 'Inspect encrypted file metadata'],
+            ],
+            [
+                ['📥', 'Input & Output'],
+                ['-t, --text <text>', 'Text to process'],
+                ['-f, --file <path>', 'File path, directory, or wildcard pattern'],
+                ['-o, --output <path>', 'Output file path'],
+                ['--config <path>', 'Path to a config file; defaults are auto-discovered'],
+                ['--select', 'Browse and choose a file or directory interactively'],
+            ],
+            [
+                ['🔑', 'Passwords & Secrets'],
+                ['-p, --password <password>', 'Password (repeat for threshold mode)'],
+                ['--threshold <number>', 'Threshold for multi-signature mode'],
+                ['--keyfile <path>', 'Key file path for encryption/decryption'],
+                ['--password-outer <password>', 'Decoy password for --hidden-vol'],
+                ['--password-hidden <password>', 'Hidden password for --hidden-vol / --hidden'],
+            ],
+            [
+                ['📦', 'File & Container Behavior'],
+                ['-c, --compress', 'Enable compression'],
+                ['-r, --recursive', 'Recursively process directories or wildcard patterns'],
+                ['--hidden-vol', 'Encrypt decoy and hidden payload into one container'],
+                ['--hidden-file <path>', 'Hidden payload path (requires --hidden-vol)'],
+                ['--hidden', 'Decrypt inner/hidden volume in decrypt mode'],
+            ],
+            [
+                ['🧬', 'Crypto Tuning'],
+                ['--kdf <type>', 'Key derivation function: pbkdf2 or argon2'],
+                ['--iterations <count>', 'Number of KDF iterations'],
+                ['--qr', 'Render encrypted text output as a QR code'],
+            ],
+            [
+                ['🛠️', 'Utility'],
+                ['--generate-keyfile [path]', 'Generate a random key file and exit (default: key.txt)'],
+                ['--debug', 'Enable debug mode'],
+                ['--log', 'Enable logging to file'],
+                ['-V, --version', 'Show version'],
+                ['-h, --help', 'Show help'],
+            ],
+        ];
+
+        const renderedSections = sections.map(([title, ...options]) =>
+            UIHelpers.renderHelpSection(title, options.map(([flags, description]) => ({ flags, description })))
         );
+
+        return [
+            UIHelpers.heading('🔐', 'Crypt Tools Help'),
+            UIHelpers.style('Beautiful, secure AES-GCM encryption for files and text.', TerminalColors.WHITE),
+            '',
+            UIHelpers.heading('🚀', 'Usage'),
+            '  crypt_tools.js [options]',
+            '',
+            renderedSections.join('\n\n'),
+            '',
+            UIHelpers.heading('✨', 'Tips'),
+            '  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively',
+            '    (equivalent to .\\temp\\**\\*.txt).',
+            '  - Password prompts show a live strength indicator.',
+            '  - Key file support: combine password + keyfile for two-factor encryption.',
+            '  - Use --select to browse for a file or directory in an interactive terminal UI.',
+            '  - Use --qr with text encryption to print the encrypted Base64 payload as a QR code.',
+            '  - Hidden volumes use two CT02 blobs plus a visible CTHV footer.',
+            '',
+            UIHelpers.heading('🌍', 'Environment Variables'),
+            '  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,',
+            '  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,',
+            '  CRYPT_TOOLS_LOG_ENABLED, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_DEBUG_ENABLED,',
+            '  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD,',
+            '  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN',
+            '',
+            UIHelpers.heading('⚙️', 'Config Keys'),
+            '  compress, compression, default_compression, kdf, default_kdf,',
+            '  iterations, default_iterations, log, logging, log_enabled,',
+            '  debug, debug_enabled, password, default_password,',
+            '  password_outer, default_password_outer,',
+            '  password_hidden, default_password_hidden,',
+            '  keyfile, default_keyfile, threshold',
+            '',
+        ].join('\n');
     }
-    if (!process.stdin.isTTY || !process.stdout.isTTY) {
-        return Promise.reject(new Error('Interactive file selection requires an interactive terminal.'));
+
+    static renderQrCode(data) {
+        if (!QRCODE_AVAILABLE) {
+            throw new Error('QR code support is not available. Please install qrcode-terminal.');
+        }
+
+        return new Promise((resolve) => {
+            qrcodeTerminal.generate(data, { small: true }, (qrText) => {
+                ConsoleLogger.show('info', 'QR Code Output:', '🔳', true, false);
+                process.stdout.write(`${qrText}\n`);
+                resolve(qrText);
+            });
+        });
     }
 
-    const initialPath = fs.existsSync(startPath) && fs.statSync(startPath).isDirectory()
-        ? startPath
-        : path.dirname(startPath || '.') || '.';
+    static selectPathInteractive(startPath = '.') {
+        if (!BLESSED_AVAILABLE) {
+            return Promise.reject(
+                new Error('Interactive file selection is not available. Please install blessed.')
+            );
+        }
+        if (!process.stdin.isTTY || !process.stdout.isTTY) {
+            return Promise.reject(new Error('Interactive file selection requires an interactive terminal.'));
+        }
 
-    return new Promise((resolve) => {
-        const screen = blessed.screen({
-            smartCSR: true,
-            title: 'Crypt Tools Interactive File Selection',
-        });
+        const initialPath = fs.existsSync(startPath) && fs.statSync(startPath).isDirectory()
+            ? startPath
+            : path.dirname(startPath || '.') || '.';
 
-        const header = blessed.box({
-            parent: screen,
-            top: 0,
-            left: 0,
-            width: '100%',
-            height: 3,
-            tags: false,
-            style: {
-                fg: 'white',
-                bg: 'blue',
-            },
-            content: ' Crypt Tools Interactive File Selection\n Use arrows to move, Enter to open/select, Backspace for parent, q to cancel',
-        });
+        return new Promise((resolve) => {
+            const screen = blessed.screen({
+                smartCSR: true,
+                title: 'Crypt Tools Interactive File Selection',
+            });
 
-        const pathBox = blessed.box({
-            parent: screen,
-            top: 3,
-            left: 0,
-            width: '100%',
-            height: 2,
-            style: { fg: 'cyan' },
-        });
-
-        const list = blessed.list({
-            parent: screen,
-            top: 5,
-            left: 0,
-            width: '100%',
-            height: '100%-5',
-            keys: true,
-            vi: true,
-            mouse: true,
-            style: {
-                selected: {
-                    bg: 'cyan',
-                    fg: 'black',
-                    bold: true,
+            const header = blessed.box({
+                parent: screen,
+                top: 0,
+                left: 0,
+                width: '100%',
+                height: 3,
+                tags: false,
+                style: {
+                    fg: 'white',
+                    bg: 'blue',
                 },
-            },
-            border: 'line',
-            label: ' Paths ',
-        });
-
-        let currentDir = path.resolve(initialPath);
-        let currentEntries = [];
-
-        function close(result) {
-            screen.destroy();
-            resolve(result);
-        }
-
-        function buildEntries(directory) {
-            const entries = [
-                { label: `📁 [.] Select current directory: ${directory}`, path: directory, action: 'select' },
-                { label: '⬆️  [..] Go to parent directory', path: path.dirname(directory), action: 'up' },
-            ];
-
-            const names = fs.readdirSync(directory).sort((a, b) => {
-                const aPath = path.join(directory, a);
-                const bPath = path.join(directory, b);
-                const aDir = fs.statSync(aPath).isDirectory();
-                const bDir = fs.statSync(bPath).isDirectory();
-                if (aDir !== bDir) {
-                    return aDir ? -1 : 1;
-                }
-                return a.localeCompare(b, undefined, { sensitivity: 'base' });
+                content: ' Crypt Tools Interactive File Selection\n Use arrows to move, Enter to open/select, Backspace for parent, q to cancel',
             });
 
-            for (const name of names) {
-                const fullPath = path.join(directory, name);
-                const isDir = fs.statSync(fullPath).isDirectory();
-                entries.push({
-                    label: `${isDir ? '📁' : '📄'} ${name}`,
-                    path: fullPath,
-                    action: isDir ? 'enter' : 'select',
+            const pathBox = blessed.box({
+                parent: screen,
+                top: 3,
+                left: 0,
+                width: '100%',
+                height: 2,
+                style: { fg: 'cyan' },
+            });
+
+            const list = blessed.list({
+                parent: screen,
+                top: 5,
+                left: 0,
+                width: '100%',
+                height: '100%-5',
+                keys: true,
+                vi: true,
+                mouse: true,
+                style: {
+                    selected: {
+                        bg: 'cyan',
+                        fg: 'black',
+                        bold: true,
+                    },
+                },
+                border: 'line',
+                label: ' Paths ',
+            });
+
+            let currentDir = path.resolve(initialPath);
+            let currentEntries = [];
+
+            function close(result) {
+                screen.destroy();
+                resolve(result);
+            }
+
+            function buildEntries(directory) {
+                const entries = [
+                    { label: `📁 [.] Select current directory: ${directory}`, path: directory, action: 'select' },
+                    { label: '⬆️  [..] Go to parent directory', path: path.dirname(directory), action: 'up' },
+                ];
+
+                const names = fs.readdirSync(directory).sort((a, b) => {
+                    const aPath = path.join(directory, a);
+                    const bPath = path.join(directory, b);
+                    const aDir = fs.statSync(aPath).isDirectory();
+                    const bDir = fs.statSync(bPath).isDirectory();
+                    if (aDir !== bDir) {
+                        return aDir ? -1 : 1;
+                    }
+                    return a.localeCompare(b, undefined, { sensitivity: 'base' });
                 });
+
+                for (const name of names) {
+                    const fullPath = path.join(directory, name);
+                    const isDir = fs.statSync(fullPath).isDirectory();
+                    entries.push({
+                        label: `${isDir ? '📁' : '📄'} ${name}`,
+                        path: fullPath,
+                        action: isDir ? 'enter' : 'select',
+                    });
+                }
+                return entries;
             }
-            return entries;
-        }
 
-        function refresh(directory) {
-            currentDir = path.resolve(directory);
-            currentEntries = buildEntries(currentDir);
-            pathBox.setContent(` Current directory: ${currentDir}`);
-            list.setItems(currentEntries.map((entry) => entry.label));
-            list.select(0);
-            screen.render();
-        }
-
-        list.on('select', (_, index) => {
-            const entry = currentEntries[index];
-            if (!entry) {
-                return;
+            function refresh(directory) {
+                currentDir = path.resolve(directory);
+                currentEntries = buildEntries(currentDir);
+                pathBox.setContent(` Current directory: ${currentDir}`);
+                list.setItems(currentEntries.map((entry) => entry.label));
+                list.select(0);
+                screen.render();
             }
-            if (entry.action === 'up' || entry.action === 'enter') {
-                refresh(entry.path);
-            } else {
-                close(entry.path);
-            }
-        });
 
-        screen.key(['backspace', 'left'], () => refresh(path.dirname(currentDir)));
-        screen.key(['q', 'escape', 'C-c'], () => close(null));
-
-        refresh(currentDir);
-        list.focus();
-    });
-}
-
-let nonTtyPasswordLinesPromise = null;
-let nonTtyPasswordLineIndex = 0;
-
-function readNonTtyPasswordLine() {
-    if (!nonTtyPasswordLinesPromise) {
-        nonTtyPasswordLinesPromise = new Promise((resolve, reject) => {
-            let data = '';
-            process.stdin.setEncoding('utf8');
-            process.stdin.on('data', (chunk) => {
-                data += chunk;
+            list.on('select', (_, index) => {
+                const entry = currentEntries[index];
+                if (!entry) {
+                    return;
+                }
+                if (entry.action === 'up' || entry.action === 'enter') {
+                    refresh(entry.path);
+                } else {
+                    close(entry.path);
+                }
             });
-            process.stdin.on('end', () => {
-                resolve(data.split(/\r?\n/));
-            });
-            process.stdin.on('error', reject);
+
+            screen.key(['backspace', 'left'], () => refresh(path.dirname(currentDir)));
+            screen.key(['q', 'escape', 'C-c'], () => close(null));
+
+            refresh(currentDir);
+            list.focus();
         });
     }
-
-    return nonTtyPasswordLinesPromise.then((lines) => {
-        if (nonTtyPasswordLineIndex >= lines.length) {
-            return '';
-        }
-        const line = lines[nonTtyPasswordLineIndex];
-        nonTtyPasswordLineIndex += 1;
-        return line.trim();
-    });
 }
 
 class ConsoleLogger {
@@ -538,379 +514,381 @@ class ConsoleLogger {
         const logEntry = `[${timestamp}] [${level.toUpperCase()}] [${icon}] ${message}\n`;
         fs.appendFileSync(ConsoleLogger.LOG_FILE, logEntry, { encoding: 'utf-8' });
     }
+
+    static logCompletionSummary(isDecrypt, successCount, totalOps, elapsedSec) {
+        const action = isDecrypt ? 'Decryption' : 'Encryption';
+        if (totalOps > 0 && successCount === totalOps) {
+            ConsoleLogger.show('success', `${action} completed successfully`, '✅');
+        } else if (successCount === 0) {
+            // Specific per-file errors are already shown, so avoid duplicating a generic failure line.
+        } else {
+            ConsoleLogger.show('warning', `${action} completed with failures`, '⚠️');
+        }
+        ConsoleLogger.show('info', `Operations completed: ${successCount}/${totalOps}`, '✔️');
+        ConsoleLogger.show('info', `Total time: ${elapsedSec.toFixed(2)}s`, '⏱️');
+    }
 }
 
 // =========================
 // Progress Bar (tqdm-like)
 // =========================
 
-function formatTqdmSize(bytes) {
-    const units = ['B', 'k', 'M', 'G', 'T'];
-    let value = bytes;
-    let unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-        value /= 1024;
-        unitIndex++;
-    }
-    if (unitIndex === 0) {
-        return `${Math.round(value)}B`;
-    }
-    return `${value.toFixed(2)}${units[unitIndex]}`;
-}
-
-function formatTqdmRate(bytesPerSec) {
-    const units = ['B', 'KB', 'MB', 'GB', 'TB'];
-    let value = bytesPerSec;
-    let unitIndex = 0;
-    while (value >= 1024 && unitIndex < units.length - 1) {
-        value /= 1024;
-        unitIndex++;
-    }
-    if (unitIndex === 0) {
-        return `${Math.round(value)}B/s`;
-    }
-    return `${value.toFixed(1)}${units[unitIndex]}/s`;
-}
-
-function formatTqdmTime(seconds) {
-    const totalSeconds = Math.max(0, Math.floor(seconds));
-    const s = totalSeconds % 60;
-    const m = Math.floor(totalSeconds / 60) % 60;
-    const h = Math.floor(totalSeconds / 3600);
-    const pad2 = (n) => String(n).padStart(2, '0');
-    if (h > 0) {
-        return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
-    }
-    return `${pad2(m)}:${pad2(s)}`;
-}
-
-function getTqdmTokens(bar, startTime, nextCurr = null) {
-    const elapsedSec = (Date.now() - startTime) / 1000;
-    const curr = nextCurr !== null ? nextCurr : bar.curr;
-    const total = bar.total;
-    const rate = elapsedSec > 0 ? (curr / elapsedSec) : 0;
-    const remainingSec = rate > 0 ? (total - curr) / rate : 0;
-    return {
-        sizes: `${formatTqdmSize(curr)}/${formatTqdmSize(total)}`,
-        telapsed: formatTqdmTime(elapsedSec),
-        teta: formatTqdmTime(remainingSec),
-        trate: formatTqdmRate(rate)
-    };
-}
-
-function calcTqdmBarWidth(label, tokens) {
-    const columns = (process.stderr && process.stderr.columns) ? process.stderr.columns : 120;
-    const fixedLen = `${label} 100%|| ${tokens.sizes} [${tokens.telapsed}<${tokens.teta}, ${tokens.trate}]`.length;
-    const width = columns - fixedLen;
-    return Math.max(10, Math.min(80, width));
-}
-
-function createTqdmBar(label, total) {
-    const initialTokens = {
-        sizes: '0B/0B',
-        telapsed: '00:00',
-        teta: '00:00',
-        trate: '0B/s'
-    };
-    const bar = new ProgressBar(`${label} :percent|:bar| :sizes [:telapsed<:teta, :trate]`, {
-        total,
-        width: calcTqdmBarWidth(label, initialTokens),
-        complete: '▓',
-        incomplete: '░',
-        head: '▓',
-        clear: false
-    });
-    const startTime = Date.now();
-    return {
-        bar,
-        render: () => {
-            const tokens = getTqdmTokens(bar, startTime);
-            bar.width = calcTqdmBarWidth(label, tokens);
-            bar.render(tokens);
-        },
-        tick: (len) => {
-            const nextCurr = bar.curr + len;
-            const tokens = getTqdmTokens(bar, startTime, nextCurr);
-            bar.width = calcTqdmBarWidth(label, tokens);
-            bar.tick(len, tokens);
+class ProgressBarUtils {
+    static formatSize(bytes) {
+        const units = ['B', 'k', 'M', 'G', 'T'];
+        let value = bytes;
+        let unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex++;
         }
-    };
-}
-
-function singlePasswordArg(passwordValue) {
-    if (Array.isArray(passwordValue)) {
-        return passwordValue[0] || '';
+        if (unitIndex === 0) {
+            return `${Math.round(value)}B`;
+        }
+        return `${value.toFixed(2)}${units[unitIndex]}`;
     }
-    return passwordValue || '';
+
+    static formatRate(bytesPerSec) {
+        const units = ['B', 'KB', 'MB', 'GB', 'TB'];
+        let value = bytesPerSec;
+        let unitIndex = 0;
+        while (value >= 1024 && unitIndex < units.length - 1) {
+            value /= 1024;
+            unitIndex++;
+        }
+        if (unitIndex === 0) {
+            return `${Math.round(value)}B/s`;
+        }
+        return `${value.toFixed(1)}${units[unitIndex]}/s`;
+    }
+
+    static formatTime(seconds) {
+        const totalSeconds = Math.max(0, Math.floor(seconds));
+        const s = totalSeconds % 60;
+        const m = Math.floor(totalSeconds / 60) % 60;
+        const h = Math.floor(totalSeconds / 3600);
+        const pad2 = (n) => String(n).padStart(2, '0');
+        if (h > 0) {
+            return `${pad2(h)}:${pad2(m)}:${pad2(s)}`;
+        }
+        return `${pad2(m)}:${pad2(s)}`;
+    }
+
+    static getTokens(bar, startTime, nextCurr = null) {
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        const curr = nextCurr !== null ? nextCurr : bar.curr;
+        const total = bar.total;
+        const rate = elapsedSec > 0 ? (curr / elapsedSec) : 0;
+        const remainingSec = rate > 0 ? (total - curr) / rate : 0;
+        return {
+            sizes: `${ProgressBarUtils.formatSize(curr)}/${ProgressBarUtils.formatSize(total)}`,
+            telapsed: ProgressBarUtils.formatTime(elapsedSec),
+            teta: ProgressBarUtils.formatTime(remainingSec),
+            trate: ProgressBarUtils.formatRate(rate)
+        };
+    }
+
+    static calcBarWidth(label, tokens) {
+        const columns = (process.stderr && process.stderr.columns) ? process.stderr.columns : 120;
+        const fixedLen = `${label} 100%|| ${tokens.sizes} [${tokens.telapsed}<${tokens.teta}, ${tokens.trate}]`.length;
+        const width = columns - fixedLen;
+        return Math.max(10, Math.min(80, width));
+    }
+
+    static create(label, total) {
+        const initialTokens = {
+            sizes: '0B/0B',
+            telapsed: '00:00',
+            teta: '00:00',
+            trate: '0B/s'
+        };
+        const bar = new ProgressBar(`${label} :percent|:bar| :sizes [:telapsed<:teta, :trate]`, {
+            total,
+            width: ProgressBarUtils.calcBarWidth(label, initialTokens),
+            complete: '▓',
+            incomplete: '░',
+            head: '▓',
+            clear: false
+        });
+        const startTime = Date.now();
+        return {
+            bar,
+            render: () => {
+                const tokens = ProgressBarUtils.getTokens(bar, startTime);
+                bar.width = ProgressBarUtils.calcBarWidth(label, tokens);
+                bar.render(tokens);
+            },
+            tick: (len) => {
+                const nextCurr = bar.curr + len;
+                const tokens = ProgressBarUtils.getTokens(bar, startTime, nextCurr);
+                bar.width = ProgressBarUtils.calcBarWidth(label, tokens);
+                bar.tick(len, tokens);
+            }
+        };
+    }
 }
 
-const CONFIG_FILENAMES = [
-    '.crypt_tools.conf',
-    '.crypt_tools.json',
-    '.crypt_tools.yml',
-    '.crypt_tools.yaml',
-];
+// =========================
+// ConfigParser
+// =========================
 
-const CONFIG_KEY_ALIASES = {
-    compress: 'compress',
-    compression: 'compress',
-    default_compression: 'compress',
-    kdf: 'kdf',
-    default_kdf: 'kdf',
-    iterations: 'iterations',
-    default_iterations: 'iterations',
-    log: 'log',
-    logging: 'log',
-    log_enabled: 'log',
-    debug: 'debug',
-    debug_enabled: 'debug',
-    password: 'password',
-    default_password: 'password',
-    password_outer: 'passwordOuter',
-    default_password_outer: 'passwordOuter',
-    password_hidden: 'passwordHidden',
-    default_password_hidden: 'passwordHidden',
-    keyfile: 'keyfile',
-    default_keyfile: 'keyfile',
-    threshold: 'threshold',
-};
+class ConfigParser {
+    static FILENAMES = [
+        '.crypt_tools.conf',
+        '.crypt_tools.json',
+        '.crypt_tools.yml',
+        '.crypt_tools.yaml',
+    ];
 
-const ENV_KEY_ALIASES = {
-    CRYPT_TOOLS_COMPRESS: 'compress',
-    CRYPT_TOOLS_COMPRESSION: 'compress',
-    CRYPT_TOOLS_KDF: 'kdf',
-    CRYPT_TOOLS_ITERATIONS: 'iterations',
-    CRYPT_TOOLS_LOG: 'log',
-    CRYPT_TOOLS_LOG_ENABLED: 'log',
-    CRYPT_TOOLS_DEBUG: 'debug',
-    CRYPT_TOOLS_DEBUG_ENABLED: 'debug',
-    CRYPT_TOOLS_PASSWORD: 'password',
-    CRYPT_TOOLS_PASSWORD_OUTER: 'passwordOuter',
-    CRYPT_TOOLS_PASSWORD_HIDDEN: 'passwordHidden',
-    CRYPT_TOOLS_KEYFILE: 'keyfile',
-    CRYPT_TOOLS_THRESHOLD: 'threshold',
-};
+    static KEY_ALIASES = {
+        compress: 'compress',
+        compression: 'compress',
+        default_compression: 'compress',
+        kdf: 'kdf',
+        default_kdf: 'kdf',
+        iterations: 'iterations',
+        default_iterations: 'iterations',
+        log: 'log',
+        logging: 'log',
+        log_enabled: 'log',
+        debug: 'debug',
+        debug_enabled: 'debug',
+        password: 'password',
+        default_password: 'password',
+        password_outer: 'passwordOuter',
+        default_password_outer: 'passwordOuter',
+        password_hidden: 'passwordHidden',
+        default_password_hidden: 'passwordHidden',
+        keyfile: 'keyfile',
+        default_keyfile: 'keyfile',
+        threshold: 'threshold',
+    };
 
-const CLI_OPTION_ALIASES = {
-    '--compress': 'compress',
-    '-c': 'compress',
-    '--kdf': 'kdf',
-    '--iterations': 'iterations',
-    '--log': 'log',
-    '--debug': 'debug',
-    '-p': 'password',
-    '--password': 'password',
-    '--password-outer': 'passwordOuter',
-    '--password-hidden': 'passwordHidden',
-    '--keyfile': 'keyfile',
-    '--threshold': 'threshold',
-    '--config': 'config',
-};
+    static ENV_KEY_ALIASES = {
+        CRYPT_TOOLS_COMPRESS: 'compress',
+        CRYPT_TOOLS_COMPRESSION: 'compress',
+        CRYPT_TOOLS_KDF: 'kdf',
+        CRYPT_TOOLS_ITERATIONS: 'iterations',
+        CRYPT_TOOLS_LOG: 'log',
+        CRYPT_TOOLS_LOG_ENABLED: 'log',
+        CRYPT_TOOLS_DEBUG: 'debug',
+        CRYPT_TOOLS_DEBUG_ENABLED: 'debug',
+        CRYPT_TOOLS_PASSWORD: 'password',
+        CRYPT_TOOLS_PASSWORD_OUTER: 'passwordOuter',
+        CRYPT_TOOLS_PASSWORD_HIDDEN: 'passwordHidden',
+        CRYPT_TOOLS_KEYFILE: 'keyfile',
+        CRYPT_TOOLS_THRESHOLD: 'threshold',
+    };
 
-function normalizeConfigKey(rawKey) {
-    return CONFIG_KEY_ALIASES[String(rawKey).trim().toLowerCase().replace(/-/g, '_')];
-}
+    static CLI_OPTION_ALIASES = {
+        '--compress': 'compress',
+        '-c': 'compress',
+        '--kdf': 'kdf',
+        '--iterations': 'iterations',
+        '--log': 'log',
+        '--debug': 'debug',
+        '-p': 'password',
+        '--password': 'password',
+        '--password-outer': 'passwordOuter',
+        '--password-hidden': 'passwordHidden',
+        '--keyfile': 'keyfile',
+        '--threshold': 'threshold',
+        '--config': 'config',
+    };
 
-function parseBool(value) {
-    if (typeof value === 'boolean') {
+    static normalizeKey(rawKey) {
+        return ConfigParser.KEY_ALIASES[String(rawKey).trim().toLowerCase().replace(/-/g, '_')];
+    }
+
+    static parseBool(value) {
+        if (typeof value === 'boolean') {
+            return value;
+        }
+        if (typeof value === 'number') {
+            return value !== 0;
+        }
+        const normalized = String(value).trim().toLowerCase();
+        if (['1', 'true', 'yes', 'on'].includes(normalized)) {
+            return true;
+        }
+        if (['0', 'false', 'no', 'off'].includes(normalized)) {
+            return false;
+        }
+        throw new Error(`Invalid boolean value: ${value}`);
+    }
+
+    static coerceValue(key, value) {
+        if (['compress', 'log', 'debug'].includes(key)) {
+            return ConfigParser.parseBool(value);
+        }
+        if (['iterations', 'threshold'].includes(key)) {
+            return Number.parseInt(value, 10);
+        }
+        if (key === 'kdf') {
+            return String(value).trim().toLowerCase();
+        }
+        if (['password', 'passwordOuter', 'passwordHidden', 'keyfile'].includes(key)) {
+            return String(value);
+        }
         return value;
     }
-    if (typeof value === 'number') {
-        return value !== 0;
-    }
-    const normalized = String(value).trim().toLowerCase();
-    if (['1', 'true', 'yes', 'on'].includes(normalized)) {
-        return true;
-    }
-    if (['0', 'false', 'no', 'off'].includes(normalized)) {
-        return false;
-    }
-    throw new Error(`Invalid boolean value: ${value}`);
-}
 
-function coerceConfigValue(key, value) {
-    if (['compress', 'log', 'debug'].includes(key)) {
-        return parseBool(value);
-    }
-    if (['iterations', 'threshold'].includes(key)) {
-        return Number.parseInt(value, 10);
-    }
-    if (key === 'kdf') {
-        return String(value).trim().toLowerCase();
-    }
-    if (['password', 'passwordOuter', 'passwordHidden', 'keyfile'].includes(key)) {
-        return String(value);
-    }
-    return value;
-}
-
-function parseSimpleYaml(content) {
-    const data = {};
-    for (const line of content.split(/\r?\n/)) {
-        const stripped = line.trim();
-        if (!stripped || stripped.startsWith('#')) {
-            continue;
-        }
-        const separator = stripped.indexOf(':');
-        if (separator === -1) {
-            throw new Error(`Invalid YAML line: ${line}`);
-        }
-        const key = stripped.slice(0, separator).trim();
-        const rawValue = stripped.slice(separator + 1).trim();
-        data[key] = rawValue;
-    }
-    return data;
-}
-
-function parseSimpleConf(content) {
-    const data = {};
-    for (const line of content.split(/\r?\n/)) {
-        const stripped = line.trim();
-        if (!stripped || stripped.startsWith('#') || stripped.startsWith(';')) {
-            continue;
-        }
-        const eqIndex = stripped.indexOf('=');
-        const colonIndex = stripped.indexOf(':');
-        const separatorIndex = eqIndex >= 0 ? eqIndex : colonIndex;
-        if (separatorIndex === -1) {
-            throw new Error(`Invalid config line: ${line}`);
-        }
-        const key = stripped.slice(0, separatorIndex).trim();
-        const rawValue = stripped.slice(separatorIndex + 1).trim();
-        data[key] = rawValue;
-    }
-    return data;
-}
-
-function readConfigFile(configPath) {
-    const ext = path.extname(configPath).toLowerCase();
-    const content = fs.readFileSync(configPath, 'utf8');
-    let parsed;
-    if (ext === '.json') {
-        parsed = JSON.parse(content);
-    } else if (ext === '.yml' || ext === '.yaml') {
-        parsed = parseSimpleYaml(content);
-    } else {
-        parsed = parseSimpleConf(content);
-    }
-
-    if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
-        throw new Error('Configuration file must contain a top-level object');
-    }
-
-    const normalized = {};
-    for (const [rawKey, rawValue] of Object.entries(parsed)) {
-        const key = normalizeConfigKey(rawKey);
-        if (!key) {
-            continue;
-        }
-        normalized[key] = coerceConfigValue(key, rawValue);
-    }
-    return normalized;
-}
-
-function discoverConfigPath(explicitPath) {
-    if (explicitPath) {
-        return { path: explicitPath, explicit: true };
-    }
-
-    for (const filename of CONFIG_FILENAMES) {
-        const candidate = path.join(process.cwd(), filename);
-        if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
-            return { path: candidate, explicit: false };
-        }
-    }
-    return { path: null, explicit: false };
-}
-
-function loadRuntimeDefaults(explicitConfigPath) {
-    const configInfo = discoverConfigPath(explicitConfigPath);
-    let configDefaults = {};
-    if (configInfo.path) {
-        try {
-            configDefaults = readConfigFile(configInfo.path);
-        } catch (err) {
-            throw new Error(`Failed to load config file ${configInfo.path}: ${err.message}`);
-        }
-    } else if (configInfo.explicit) {
-        throw new Error(`Config file not found: ${explicitConfigPath}`);
-    }
-
-    const envDefaults = {};
-    for (const [envKey, normalizedKey] of Object.entries(ENV_KEY_ALIASES)) {
-        const rawValue = process.env[envKey];
-        if (rawValue === undefined || rawValue === '') {
-            continue;
-        }
-        envDefaults[normalizedKey] = coerceConfigValue(normalizedKey, rawValue);
-    }
-
-    return { configPath: configInfo.path, configDefaults, envDefaults };
-}
-
-function detectCliOverrides(argv) {
-    const overrides = new Set();
-    for (const token of argv) {
-        if (token.startsWith('--')) {
-            const flag = token.split('=', 1)[0];
-            const normalized = CLI_OPTION_ALIASES[flag];
-            if (normalized) {
-                overrides.add(normalized);
+    static parseYaml(content) {
+        const data = {};
+        for (const line of content.split(/\r?\n/)) {
+            const stripped = line.trim();
+            if (!stripped || stripped.startsWith('#')) {
+                continue;
             }
-        } else if (CLI_OPTION_ALIASES[token]) {
-            overrides.add(CLI_OPTION_ALIASES[token]);
+            const separator = stripped.indexOf(':');
+            if (separator === -1) {
+                throw new Error(`Invalid YAML line: ${line}`);
+            }
+            const key = stripped.slice(0, separator).trim();
+            const rawValue = stripped.slice(separator + 1).trim();
+            data[key] = rawValue;
         }
-    }
-    return overrides;
-}
-
-function applyRuntimeDefaults(options, cliOverrides, configDefaults, envDefaults) {
-    const mergedDefaults = { ...configDefaults, ...envDefaults };
-
-    if (!cliOverrides.has('password') && (!options.password || options.password.length === 0) && mergedDefaults.password !== undefined) {
-        options.password = Array.isArray(mergedDefaults.password) ? [...mergedDefaults.password] : [mergedDefaults.password];
+        return data;
     }
 
-    for (const attr of ['passwordOuter', 'passwordHidden', 'keyfile', 'threshold']) {
-        if (cliOverrides.has(attr)) {
-            continue;
+    static parseConf(content) {
+        const data = {};
+        for (const line of content.split(/\r?\n/)) {
+            const stripped = line.trim();
+            if (!stripped || stripped.startsWith('#') || stripped.startsWith(';')) {
+                continue;
+            }
+            const eqIndex = stripped.indexOf('=');
+            const colonIndex = stripped.indexOf(':');
+            const separatorIndex = eqIndex >= 0 ? eqIndex : colonIndex;
+            if (separatorIndex === -1) {
+                throw new Error(`Invalid config line: ${line}`);
+            }
+            const key = stripped.slice(0, separatorIndex).trim();
+            const rawValue = stripped.slice(separatorIndex + 1).trim();
+            data[key] = rawValue;
         }
-        if ((options[attr] === undefined || options[attr] === null) && mergedDefaults[attr] !== undefined) {
-            options[attr] = mergedDefaults[attr];
+        return data;
+    }
+
+    static readFile(configPath) {
+        const ext = path.extname(configPath).toLowerCase();
+        const content = fs.readFileSync(configPath, 'utf8');
+        let parsed;
+        if (ext === '.json') {
+            parsed = JSON.parse(content);
+        } else if (ext === '.yml' || ext === '.yaml') {
+            parsed = ConfigParser.parseYaml(content);
+        } else {
+            parsed = ConfigParser.parseConf(content);
         }
-    }
 
-    for (const attr of ['compress', 'log', 'debug']) {
-        if (cliOverrides.has(attr)) {
-            continue;
+        if (!parsed || Array.isArray(parsed) || typeof parsed !== 'object') {
+            throw new Error('Configuration file must contain a top-level object');
         }
-        if (mergedDefaults[attr] !== undefined) {
-            options[attr] = Boolean(mergedDefaults[attr]);
+
+        const normalized = {};
+        for (const [rawKey, rawValue] of Object.entries(parsed)) {
+            const key = ConfigParser.normalizeKey(rawKey);
+            if (!key) {
+                continue;
+            }
+            normalized[key] = ConfigParser.coerceValue(key, rawValue);
         }
+        return normalized;
     }
 
-    if (!cliOverrides.has('kdf') && options.kdf === undefined && mergedDefaults.kdf !== undefined) {
-        options.kdf = mergedDefaults.kdf;
+    static discoverPath(explicitPath) {
+        if (explicitPath) {
+            return { path: explicitPath, explicit: true };
+        }
+
+        for (const filename of ConfigParser.FILENAMES) {
+            const candidate = path.join(process.cwd(), filename);
+            if (fs.existsSync(candidate) && fs.statSync(candidate).isFile()) {
+                return { path: candidate, explicit: false };
+            }
+        }
+        return { path: null, explicit: false };
     }
 
-    if (!cliOverrides.has('iterations') && options.iterations === undefined && mergedDefaults.iterations !== undefined) {
-        options.iterations = mergedDefaults.iterations;
+    static loadDefaults(explicitConfigPath) {
+        const configInfo = ConfigParser.discoverPath(explicitConfigPath);
+        const configDefaults = {};
+        if (configInfo.path) {
+            try {
+                Object.assign(configDefaults, ConfigParser.readFile(configInfo.path));
+            } catch (err) {
+                throw new Error(`Failed to load config file ${configInfo.path}: ${err.message}`);
+            }
+        } else if (configInfo.explicit) {
+            throw new Error(`Config file not found: ${explicitConfigPath}`);
+        }
+
+        const envDefaults = {};
+        for (const [envKey, normalizedKey] of Object.entries(ConfigParser.ENV_KEY_ALIASES)) {
+            const rawValue = process.env[envKey];
+            if (rawValue === undefined || rawValue === '') {
+                continue;
+            }
+            envDefaults[normalizedKey] = ConfigParser.coerceValue(normalizedKey, rawValue);
+        }
+
+        return { configPath: configInfo.path, configDefaults, envDefaults };
     }
 
-    return options;
-}
-
-function logCompletionSummary(isDecrypt, successCount, totalOps, elapsedSec) {
-    const action = isDecrypt ? 'Decryption' : 'Encryption';
-    if (totalOps > 0 && successCount === totalOps) {
-        ConsoleLogger.show('success', `${action} completed successfully`, '✅');
-    } else if (successCount === 0) {
-        // Specific per-file errors are already shown, so avoid duplicating a generic failure line.
-    } else {
-        ConsoleLogger.show('warning', `${action} completed with failures`, '⚠️');
+    static detectCliOverrides(argv) {
+        const overrides = new Set();
+        for (const token of argv) {
+            if (token.startsWith('--')) {
+                const flag = token.split('=', 1)[0];
+                const normalized = ConfigParser.CLI_OPTION_ALIASES[flag];
+                if (normalized) {
+                    overrides.add(normalized);
+                }
+            } else if (ConfigParser.CLI_OPTION_ALIASES[token]) {
+                overrides.add(ConfigParser.CLI_OPTION_ALIASES[token]);
+            }
+        }
+        return overrides;
     }
-    ConsoleLogger.show('info', `Operations completed: ${successCount}/${totalOps}`, '✔️');
-    ConsoleLogger.show('info', `Total time: ${elapsedSec.toFixed(2)}s`, '⏱️');
+
+    static applyDefaults(options, cliOverrides, configDefaults, envDefaults) {
+        const mergedDefaults = { ...configDefaults, ...envDefaults };
+
+        if (!cliOverrides.has('password') && (!options.password || options.password.length === 0) && 'password' in mergedDefaults) {
+            const passwordValue = mergedDefaults.password;
+            options.password = Array.isArray(passwordValue) ? passwordValue : [passwordValue];
+        }
+
+        for (const attr of ['passwordOuter', 'passwordHidden', 'keyfile', 'threshold']) {
+            if (cliOverrides.has(attr)) {
+                continue;
+            }
+            if (options[attr] === undefined && attr in mergedDefaults) {
+                options[attr] = mergedDefaults[attr];
+            }
+        }
+
+        for (const attr of ['compress', 'log', 'debug']) {
+            if (cliOverrides.has(attr)) {
+                continue;
+            }
+            if (attr in mergedDefaults) {
+                options[attr] = Boolean(mergedDefaults[attr]);
+            }
+        }
+
+        if (!cliOverrides.has('kdf') && options.kdf === undefined && 'kdf' in mergedDefaults) {
+            options.kdf = mergedDefaults.kdf;
+        }
+
+        if (!cliOverrides.has('iterations') && options.iterations === undefined && 'iterations' in mergedDefaults) {
+            options.iterations = mergedDefaults.iterations;
+        }
+
+        return options;
+    }
 }
 
 class Banner {
@@ -973,315 +951,319 @@ class Banner {
     }
 }
 
-function uint32ToBuffer(value) {
-    const buf = Buffer.alloc(4);
-    buf.writeUInt32BE(value >>> 0, 0);
-    return buf;
-}
+// =========================
+// HeaderParser
+// =========================
 
-function bufferToUint32(buf) {
-    return buf.readUInt32BE(0);
-}
-
-function buildHeader({ compress = false, isText = false, useKeyfile = false, kdfId = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS } = {}) {
-    let flags = 0;
-    if (compress) flags |= Config.FLAG_COMPRESS;
-    if (isText) flags |= Config.FLAG_TEXT;
-    if (useKeyfile) flags |= Config.FLAG_KEYFILE;
-
-    const kdfParams = uint32ToBuffer(iterations);
-    return Buffer.concat([
-        Config.MAGIC,
-        Buffer.from([Config.FORMAT_VERSION, flags, kdfId, 0x00, Config.SALT_SIZE, Config.NONCE_SIZE, Config.TAG_SIZE, kdfParams.length]),
-        kdfParams
-    ]);
-}
-
-function parseCT02HeaderFromBuffer(buffer) {
-    if (buffer.length < 12) {
-        throw new Error('CT02 header too short');
-    }
-    if (!buffer.subarray(0, 4).equals(Config.MAGIC)) {
-        throw new Error('Invalid CT02 magic');
+class HeaderParser {
+    static uint32ToBuffer(value) {
+        const buf = Buffer.alloc(4);
+        buf.writeUInt32BE(value >>> 0, 0);
+        return buf;
     }
 
-    const version = buffer[4];
-    const flags = buffer[5];
-    const kdfId = buffer[6];
-    const saltLen = buffer[8];
-    const nonceLen = buffer[9];
-    const tagLen = buffer[10];
-    const kdfParamLen = buffer[11];
-    const headerLen = 12 + kdfParamLen;
-
-    if (buffer.length < headerLen) {
-        throw new Error('Incomplete CT02 header');
+    static bufferToUint32(buf) {
+        return buf.readUInt32BE(0);
     }
 
-    const kdfParams = buffer.subarray(12, headerLen);
-    const iterations = kdfParamLen === 4 ? bufferToUint32(kdfParams) : Config.PBKDF2_ITERATIONS;
+    static buildHeader({ compress = false, isText = false, useKeyfile = false, kdfId = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS } = {}) {
+        let flags = 0;
+        if (compress) flags |= Config.FLAG_COMPRESS;
+        if (isText) flags |= Config.FLAG_TEXT;
+        if (useKeyfile) flags |= Config.FLAG_KEYFILE;
 
-    return {
-        format: Config.MAGIC.toString('ascii'),
-        version,
-        flags,
-        compress: Boolean(flags & Config.FLAG_COMPRESS),
-        isText: Boolean(flags & Config.FLAG_TEXT),
-        useKeyfile: Boolean(flags & Config.FLAG_KEYFILE),
-        kdfId,
-        iterations,
-        saltLen,
-        nonceLen,
-        tagLen,
-        kdfParamLen,
-        headerLen,
-        isLegacy: false
-    };
-}
-
-function parseLegacyHeader({ textPayload = false } = {}) {
-    return {
-        format: 'legacy-v2.1',
-        version: 'legacy',
-        flags: 0,
-        compress: null,
-        isText: textPayload,
-        useKeyfile: false,
-        kdfId: Config.KDF_PBKDF2,
-        iterations: Config.PBKDF2_ITERATIONS,
-        saltLen: Config.SALT_SIZE,
-        nonceLen: Config.NONCE_SIZE,
-        tagLen: Config.TAG_SIZE,
-        kdfParamLen: 4,
-        headerLen: 0,
-        isLegacy: true
-    };
-}
-
-function parseFormatFromBuffer(buffer, { textPayload = false } = {}) {
-    if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Config.MAGIC)) {
-        return parseCT02HeaderFromBuffer(buffer);
-    }
-    return parseLegacyHeader({ textPayload });
-}
-
-/**
- * Parse hidden-volume footer from end of file.
- * @returns {null | { outerTotalLen: number, hiddenStart: number, hiddenLen: number, fileSize: number }}
- */
-function parseHiddenContainerFooterFromPath(inputPath) {
-    let fileSize;
-    try {
-        fileSize = fs.statSync(inputPath).size;
-    } catch {
-        return null;
+        const kdfParams = HeaderParser.uint32ToBuffer(iterations);
+        return Buffer.concat([
+            Config.MAGIC,
+            Buffer.from([Config.FORMAT_VERSION, flags, kdfId, 0x00, Config.SALT_SIZE, Config.NONCE_SIZE, Config.TAG_SIZE, kdfParams.length]),
+            kdfParams
+        ]);
     }
 
-    const minBlob = Config.FIXED_HEADER_SIZE + Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE;
-    if (fileSize < minBlob * 2 + Config.CONTAINER_FOOTER_SIZE) {
-        return null;
+    static parseCT02(buffer) {
+        if (buffer.length < 12) {
+            throw new Error('CT02 header too short');
+        }
+        if (!buffer.subarray(0, 4).equals(Config.MAGIC)) {
+            throw new Error('Invalid CT02 magic');
+        }
+
+        const version = buffer[4];
+        const flags = buffer[5];
+        const kdfId = buffer[6];
+        const saltLen = buffer[8];
+        const nonceLen = buffer[9];
+        const tagLen = buffer[10];
+        const kdfParamLen = buffer[11];
+        const headerLen = 12 + kdfParamLen;
+
+        if (buffer.length < headerLen) {
+            throw new Error('Incomplete CT02 header');
+        }
+
+        const kdfParams = buffer.subarray(12, headerLen);
+        const iterations = kdfParamLen === 4 ? HeaderParser.bufferToUint32(kdfParams) : Config.PBKDF2_ITERATIONS;
+
+        return {
+            format: Config.MAGIC.toString('ascii'),
+            version,
+            flags,
+            compress: Boolean(flags & Config.FLAG_COMPRESS),
+            isText: Boolean(flags & Config.FLAG_TEXT),
+            useKeyfile: Boolean(flags & Config.FLAG_KEYFILE),
+            kdfId,
+            iterations,
+            saltLen,
+            nonceLen,
+            tagLen,
+            kdfParamLen,
+            headerLen,
+            isLegacy: false
+        };
     }
 
-    const fd = fs.openSync(inputPath, 'r');
-    const footer = Buffer.alloc(Config.CONTAINER_FOOTER_SIZE);
-    fs.readSync(fd, footer, 0, footer.length, fileSize - Config.CONTAINER_FOOTER_SIZE);
-    fs.closeSync(fd);
-
-    if (!footer.subarray(0, 4).equals(Config.CONTAINER_FOOTER_MAGIC)) {
-        return null;
+    static parseLegacy({ textPayload = false } = {}) {
+        return {
+            format: 'legacy-v2.1',
+            version: 'legacy',
+            flags: 0,
+            compress: null,
+            isText: textPayload,
+            useKeyfile: false,
+            kdfId: Config.KDF_PBKDF2,
+            iterations: Config.PBKDF2_ITERATIONS,
+            saltLen: Config.SALT_SIZE,
+            nonceLen: Config.NONCE_SIZE,
+            tagLen: Config.TAG_SIZE,
+            kdfParamLen: 4,
+            headerLen: 0,
+            isLegacy: true
+        };
     }
 
-    const outerTotalLen = footer.readBigUInt64BE(4);
-    if (outerTotalLen <= 0n || outerTotalLen >= BigInt(fileSize - Config.CONTAINER_FOOTER_SIZE)) {
-        return null;
-    }
-    const outerNum = Number(outerTotalLen);
-    const hiddenStart = outerNum;
-    const hiddenLen = fileSize - Config.CONTAINER_FOOTER_SIZE - outerNum;
-    if (hiddenLen < minBlob) {
-        return null;
+    static parseFormat(buffer, { textPayload = false } = {}) {
+        if (buffer.length >= 4 && buffer.subarray(0, 4).equals(Config.MAGIC)) {
+            return HeaderParser.parseCT02(buffer);
+        }
+        return HeaderParser.parseLegacy({ textPayload });
     }
 
-    const magicCheck = Buffer.alloc(4);
-    const fd2 = fs.openSync(inputPath, 'r');
-    fs.readSync(fd2, magicCheck, 0, 4, hiddenStart);
-    fs.closeSync(fd2);
-    if (!magicCheck.equals(Config.MAGIC)) {
-        return null;
-    }
-
-    return {
-        outerTotalLen: outerNum,
-        hiddenStart,
-        hiddenLen,
-        fileSize
-    };
-}
-
-function inspectThresholdRequirementsFromPath(inputPath) {
-    if (!fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
-        return null;
-    }
-
-    const fd = fs.openSync(inputPath, 'r');
-    try {
-        const prefix = Buffer.alloc(Config.FIXED_HEADER_SIZE);
-        const bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0);
-        if (bytesRead < Config.FIXED_HEADER_SIZE || !prefix.subarray(0, 4).equals(Config.MAGIC)) {
+    static parseHiddenFooter(inputPath) {
+        let fileSize;
+        try {
+            fileSize = fs.statSync(inputPath).size;
+        } catch {
             return null;
         }
 
-        const metadata = parseFormatFromBuffer(prefix, { textPayload: false });
-        if (metadata.isLegacy || !(metadata.flags & Config.FLAG_THRESHOLD)) {
+        const minBlob = Config.FIXED_HEADER_SIZE + Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE;
+        if (fileSize < minBlob * 2 + Config.CONTAINER_FOOTER_SIZE) {
             return null;
         }
 
-        const shareCountsOffset = metadata.headerLen + metadata.saltLen + metadata.nonceLen;
-        const shareCounts = Buffer.alloc(2);
-        const shareBytesRead = fs.readSync(fd, shareCounts, 0, 2, shareCountsOffset);
-        if (shareBytesRead !== 2) {
-            throw new Error('Threshold metadata is incomplete');
+        const fd = fs.openSync(inputPath, 'r');
+        const footer = Buffer.alloc(Config.CONTAINER_FOOTER_SIZE);
+        fs.readSync(fd, footer, 0, footer.length, fileSize - Config.CONTAINER_FOOTER_SIZE);
+        fs.closeSync(fd);
+
+        if (!footer.subarray(0, 4).equals(Config.CONTAINER_FOOTER_MAGIC)) {
+            return null;
+        }
+
+        const outerTotalLen = footer.readBigUInt64BE(4);
+        if (outerTotalLen <= 0n || outerTotalLen >= BigInt(fileSize - Config.CONTAINER_FOOTER_SIZE)) {
+            return null;
+        }
+        const outerNum = Number(outerTotalLen);
+        const hiddenStart = outerNum;
+        const hiddenLen = fileSize - Config.CONTAINER_FOOTER_SIZE - outerNum;
+        if (hiddenLen < minBlob) {
+            return null;
+        }
+
+        const magicCheck = Buffer.alloc(4);
+        const fd2 = fs.openSync(inputPath, 'r');
+        fs.readSync(fd2, magicCheck, 0, 4, hiddenStart);
+        fs.closeSync(fd2);
+        if (!magicCheck.equals(Config.MAGIC)) {
+            return null;
         }
 
         return {
-            numPasswords: shareCounts[0],
-            threshold: shareCounts[1]
+            outerTotalLen: outerNum,
+            hiddenStart,
+            hiddenLen,
+            fileSize
         };
-    } finally {
-        fs.closeSync(fd);
-    }
-}
-
-function inspectCT02BlobFromPath(inputPath, { blobStart = 0, blobSpan = null } = {}) {
-    const fileSize = fs.statSync(inputPath).size;
-    const span = blobSpan == null ? fileSize - blobStart : blobSpan;
-    if (span <= 0) {
-        throw new Error('Invalid encrypted file structure');
     }
 
-    const fd = fs.openSync(inputPath, 'r');
-    try {
-        let prefix = Buffer.alloc(Math.min(Config.FIXED_HEADER_SIZE, span));
-        const bytesRead = fs.readSync(fd, prefix, 0, prefix.length, blobStart);
-        prefix = prefix.subarray(0, bytesRead);
-
-        if (prefix.length < Config.FIXED_HEADER_SIZE) {
-            throw new Error('File is too small to inspect');
-        }
-        if (!prefix.subarray(0, 4).equals(Config.MAGIC)) {
-            throw new Error('Unrecognized file format. Only CT02 encrypted files can be inspected reliably.');
+    static inspectThreshold(inputPath) {
+        if (!fs.existsSync(inputPath) || !fs.statSync(inputPath).isFile()) {
+            return null;
         }
 
-        let metadata = parseFormatFromBuffer(prefix, { textPayload: false });
-        if (!metadata.isLegacy && prefix.length < metadata.headerLen) {
-            prefix = Buffer.alloc(metadata.headerLen);
-            fs.readSync(fd, prefix, 0, metadata.headerLen, blobStart);
-            metadata = parseCT02HeaderFromBuffer(prefix);
-        }
+        const fd = fs.openSync(inputPath, 'r');
+        try {
+            const prefix = Buffer.alloc(Config.FIXED_HEADER_SIZE);
+            const bytesRead = fs.readSync(fd, prefix, 0, prefix.length, 0);
+            if (bytesRead < Config.FIXED_HEADER_SIZE || !prefix.subarray(0, 4).equals(Config.MAGIC)) {
+                return null;
+            }
 
-        const result = {
-            format: metadata.format,
-            version: metadata.version,
-            legacy: metadata.isLegacy,
-            compression: metadata.compress ? 'enabled' : 'disabled',
-            keyfile: metadata.useKeyfile ? 'enabled' : 'disabled',
-            kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : (metadata.kdfId === Config.KDF_ARGON2 ? 'Argon2id' : `unknown(${metadata.kdfId})`),
-            iterations: metadata.iterations,
-            saltLength: metadata.saltLen,
-            nonceLength: metadata.nonceLen,
-            tagLength: metadata.tagLen,
-            headerLength: metadata.headerLen,
-            blobSize: span,
-            thresholdMode: (metadata.flags & Config.FLAG_THRESHOLD) ? 'enabled' : 'disabled'
-        };
+            const metadata = HeaderParser.parseFormat(prefix, { textPayload: false });
+            if (metadata.isLegacy || !(metadata.flags & Config.FLAG_THRESHOLD)) {
+                return null;
+            }
 
-        let metadataBytes = metadata.headerLen + metadata.saltLen + metadata.nonceLen + metadata.tagLen;
-        if (metadata.flags & Config.FLAG_THRESHOLD) {
-            const numSharesAndThreshold = Buffer.alloc(2);
-            const shareBytesRead = fs.readSync(fd, numSharesAndThreshold, 0, 2, blobStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen);
+            const shareCountsOffset = metadata.headerLen + metadata.saltLen + metadata.nonceLen;
+            const shareCounts = Buffer.alloc(2);
+            const shareBytesRead = fs.readSync(fd, shareCounts, 0, 2, shareCountsOffset);
             if (shareBytesRead !== 2) {
                 throw new Error('Threshold metadata is incomplete');
             }
-            const numPasswords = numSharesAndThreshold[0];
-            const thresholdRequired = numSharesAndThreshold[1];
-            const shareSize = Config.SALT_SIZE + Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE;
-            const shareMetadataSize = 2 + (numPasswords * shareSize);
-            metadataBytes += shareMetadataSize;
-            result.numPasswords = numPasswords;
-            result.thresholdRequired = thresholdRequired;
-            result.shareMetadataSize = shareMetadataSize;
-        }
 
-        const ciphertextSize = span - metadataBytes;
-        if (ciphertextSize < 0) {
+            return {
+                numPasswords: shareCounts[0],
+                threshold: shareCounts[1]
+            };
+        } finally {
+            fs.closeSync(fd);
+        }
+    }
+
+    static inspectBlob(inputPath, { blobStart = 0, blobSpan = null } = {}) {
+        const fileSize = fs.statSync(inputPath).size;
+        const span = blobSpan == null ? fileSize - blobStart : blobSpan;
+        if (span <= 0) {
             throw new Error('Invalid encrypted file structure');
         }
-        result.ciphertextSize = ciphertextSize;
-        return result;
-    } finally {
-        fs.closeSync(fd);
-    }
-}
 
-// =========================
-// Key File Functions
-// =========================
+        const fd = fs.openSync(inputPath, 'r');
+        try {
+            let prefix = Buffer.alloc(Math.min(Config.FIXED_HEADER_SIZE, span));
+            const bytesRead = fs.readSync(fd, prefix, 0, prefix.length, blobStart);
+            prefix = prefix.subarray(0, bytesRead);
 
-function generateKeyfile(outputPath, keySize = 16) {
-    try {
-        const key = crypto.randomBytes(keySize);
-        const recoveryKey = key.toString('base64url');
-        fs.writeFileSync(outputPath, `${recoveryKey}\n`, 'utf8');
-        ConsoleLogger.show('success', `Recovery key file generated: ${outputPath}`);
-        ConsoleLogger.show('info', `Key size: ${keySize} bytes (${keySize * 8} bits)`);
-        return true;
-    } catch (err) {
-        ConsoleLogger.show('error', `Failed to generate key file: ${err.message}`);
-        return false;
-    }
-}
-
-function readKeyfile(keyfilePath) {
-    try {
-        if (!fs.existsSync(keyfilePath)) {
-            throw new Error(`Key file not found: ${keyfilePath}`);
-        }
-
-        const rawData = fs.readFileSync(keyfilePath);
-        if (rawData.length > 4096) {
-            throw new Error(`Key file too large: ${rawData.length} bytes (maximum 4096)`);
-        }
-
-        let keyData = rawData;
-        const textData = rawData.toString('utf8').trim();
-        if (textData.length > 0) {
-            if (!/^[A-Za-z0-9_-]+$/.test(textData)) {
-                throw new Error('Recovery key contains invalid characters');
+            if (prefix.length < Config.FIXED_HEADER_SIZE) {
+                throw new Error('File is too small to inspect');
             }
-            keyData = Buffer.from(textData, 'base64url');
-        }
+            if (!prefix.subarray(0, 4).equals(Config.MAGIC)) {
+                throw new Error('Unrecognized file format. Only CT02 encrypted files can be inspected reliably.');
+            }
 
-        if (keyData.length < 16) {
-            throw new Error(`Key file too small: ${keyData.length} bytes (minimum 16)`);
-        }
+            let metadata = HeaderParser.parseFormat(prefix, { textPayload: false });
+            if (!metadata.isLegacy && prefix.length < metadata.headerLen) {
+                prefix = Buffer.alloc(metadata.headerLen);
+                fs.readSync(fd, prefix, 0, metadata.headerLen, blobStart);
+                metadata = HeaderParser.parseCT02(prefix);
+            }
 
-        if (keyData.length > 1024) {
-            throw new Error(`Key file too large: ${keyData.length} bytes (maximum 1024)`);
-        }
+            const result = {
+                format: metadata.format,
+                version: metadata.version,
+                legacy: metadata.isLegacy,
+                compression: metadata.compress ? 'enabled' : 'disabled',
+                keyfile: metadata.useKeyfile ? 'enabled' : 'disabled',
+                kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : (metadata.kdfId === Config.KDF_ARGON2 ? 'Argon2id' : `unknown(${metadata.kdfId})`),
+                iterations: metadata.iterations,
+                saltLength: metadata.saltLen,
+                nonceLength: metadata.nonceLen,
+                tagLength: metadata.tagLen,
+                headerLength: metadata.headerLen,
+                blobSize: span,
+                thresholdMode: (metadata.flags & Config.FLAG_THRESHOLD) ? 'enabled' : 'disabled'
+            };
 
-        ConsoleLogger.show('debug', `Read key file: ${keyfilePath} (${keyData.length} bytes)`);
-        return keyData;
-    } catch (err) {
-        ConsoleLogger.show('error', `Failed to read key file: ${err.message}`);
-        return null;
+            let metadataBytes = metadata.headerLen + metadata.saltLen + metadata.nonceLen + metadata.tagLen;
+            if (metadata.flags & Config.FLAG_THRESHOLD) {
+                const numSharesAndThreshold = Buffer.alloc(2);
+                const shareBytesRead = fs.readSync(fd, numSharesAndThreshold, 0, 2, blobStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen);
+                if (shareBytesRead !== 2) {
+                    throw new Error('Threshold metadata is incomplete');
+                }
+                const numPasswords = numSharesAndThreshold[0];
+                const thresholdRequired = numSharesAndThreshold[1];
+                const shareSize = Config.SALT_SIZE + Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE;
+                const shareMetadataSize = 2 + (numPasswords * shareSize);
+                metadataBytes += shareMetadataSize;
+                result.numPasswords = numPasswords;
+                result.thresholdRequired = thresholdRequired;
+                result.shareMetadataSize = shareMetadataSize;
+            }
+
+            const ciphertextSize = span - metadataBytes;
+            if (ciphertextSize < 0) {
+                throw new Error('Invalid encrypted file structure');
+            }
+            result.ciphertextSize = ciphertextSize;
+            return result;
+        } finally {
+            fs.closeSync(fd);
+        }
     }
 }
 
-function combinePasswordAndKeyfile(password, keyfileData) {
-    const passwordBuffer = Buffer.from(password, 'utf-8');
-    const combined = Buffer.concat([passwordBuffer, keyfileData]);
-    const hashed = crypto.createHash('sha256').update(combined).digest();
-    return hashed.toString('hex');
+// =========================
+// KeyFileUtils
+// =========================
+
+class KeyFileUtils {
+    static generate(outputPath, keySize = 16) {
+        try {
+            const key = crypto.randomBytes(keySize);
+            const recoveryKey = key.toString('base64url');
+            fs.writeFileSync(outputPath, `${recoveryKey}\n`, 'utf8');
+            ConsoleLogger.show('success', `Recovery key file generated: ${outputPath}`);
+            ConsoleLogger.show('info', `Key size: ${keySize} bytes (${keySize * 8} bits)`);
+            return true;
+        } catch (err) {
+            ConsoleLogger.show('error', `Failed to generate key file: ${err.message}`);
+            return false;
+        }
+    }
+
+    static read(keyfilePath) {
+        try {
+            if (!fs.existsSync(keyfilePath)) {
+                throw new Error(`Key file not found: ${keyfilePath}`);
+            }
+
+            const rawData = fs.readFileSync(keyfilePath);
+            if (rawData.length > 4096) {
+                throw new Error(`Key file too large: ${rawData.length} bytes (maximum 4096)`);
+            }
+
+            let keyData = rawData;
+            const textData = rawData.toString('utf8').trim();
+            if (textData.length > 0) {
+                if (!/^[A-Za-z0-9_-]+$/.test(textData)) {
+                    throw new Error('Recovery key contains invalid characters');
+                }
+                keyData = Buffer.from(textData, 'base64url');
+            }
+
+            if (keyData.length < 16) {
+                throw new Error(`Key file too small: ${keyData.length} bytes (minimum 16)`);
+            }
+
+            if (keyData.length > 1024) {
+                throw new Error(`Key file too large: ${keyData.length} bytes (maximum 1024)`);
+            }
+
+            ConsoleLogger.show('debug', `Read key file: ${keyfilePath} (${keyData.length} bytes)`);
+            return keyData;
+        } catch (err) {
+            ConsoleLogger.show('error', `Failed to read key file: ${err.message}`);
+            return null;
+        }
+    }
+
+    static combinePasswordAndKeyfile(password, keyfileData) {
+        const passwordBuffer = Buffer.from(password, 'utf-8');
+        const combined = Buffer.concat([passwordBuffer, keyfileData]);
+        const hashed = crypto.createHash('sha256').update(combined).digest();
+        return hashed.toString('hex');
+    }
 }
 
 // =========================
@@ -1293,7 +1275,7 @@ class CryptoEngine {
         let derivedFrom;
         if (keyfileData) {
             ConsoleLogger.show('debug', 'Using key file for key derivation');
-            derivedFrom = combinePasswordAndKeyfile(password, keyfileData);
+            derivedFrom = KeyFileUtils.combinePasswordAndKeyfile(password, keyfileData);
         } else {
             derivedFrom = password;
         }
@@ -1344,7 +1326,7 @@ class CryptoEngine {
         const salt = crypto.randomBytes(Config.SALT_SIZE);
         const nonce = crypto.randomBytes(Config.NONCE_SIZE);
         const useKeyfile = keyfileData !== null;
-        const header = buildHeader({ isText: true, useKeyfile, kdfId: kdfType, iterations });
+        const header = HeaderParser.buildHeader({ isText: true, useKeyfile, kdfId: kdfType, iterations });
         ConsoleLogger.show('debug', `Generated salt (${Config.SALT_SIZE} bytes) and nonce (${Config.NONCE_SIZE} bytes)`);
         const key = await this._deriveKey(password, salt, keyfileData, kdfType, iterations);
 
@@ -1360,7 +1342,7 @@ class CryptoEngine {
     async decryptData(encData, password, keyfileData = null) {
         try {
             ConsoleLogger.show('debug', `Starting in-memory data decryption. Total input size: ${encData.length} bytes`);
-            const metadata = parseFormatFromBuffer(encData, { textPayload: true });
+            const metadata = HeaderParser.parseFormat(encData, { textPayload: true });
             const overhead = metadata.headerLen + metadata.saltLen + metadata.nonceLen + metadata.tagLen;
             if (encData.length < overhead) {
                 ConsoleLogger.show('debug', 'Input data is smaller than minimum overhead');
@@ -1423,14 +1405,14 @@ class CryptoEngine {
             const key = await this._deriveKey(password, salt, keyfileData, kdfType, iterations);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher');
             const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
-            const header = buildHeader({ compress, useKeyfile, kdfId: kdfType, iterations });
+            const header = HeaderParser.buildHeader({ compress, useKeyfile, kdfId: kdfType, iterations });
 
             const desc = compress ? '[🔒] Compressing & Encrypting' : '[🔒] Encrypting';
             const label = compress ? '[🔒] Compressing & Encrypting:' : '[🔒] Encrypting:';
             if (compress) {
                 ConsoleLogger.show('debug', 'Compression enabled (zlib level 9)');
             }
-            const progress = createTqdmBar(label, fileSize);
+            const progress = ProgressBarUtils.create(label, fileSize);
             progress.render();
 
             const outputStream = fs.createWriteStream(outputPath);
@@ -1486,7 +1468,7 @@ class CryptoEngine {
             const fd = fs.openSync(inputPath, 'r');
             let prefix = Buffer.alloc(Math.min(Config.FIXED_HEADER_SIZE, fileSize));
             fs.readSync(fd, prefix, 0, prefix.length, sliceStart);
-            let metadata = parseFormatFromBuffer(prefix, { textPayload: false });
+            let metadata = HeaderParser.parseFormat(prefix, { textPayload: false });
             if (metadata.isLegacy && sliceStart !== 0) {
                 fs.closeSync(fd);
                 throw new Error('Legacy format does not support container slices');
@@ -1494,7 +1476,7 @@ class CryptoEngine {
             if (!metadata.isLegacy && prefix.length < metadata.headerLen) {
                 prefix = Buffer.alloc(metadata.headerLen);
                 fs.readSync(fd, prefix, 0, metadata.headerLen, sliceStart);
-                metadata = parseCT02HeaderFromBuffer(prefix);
+                metadata = HeaderParser.parseCT02(prefix);
             }
 
             const useKeyfile = metadata.useKeyfile || false;
@@ -1530,7 +1512,7 @@ class CryptoEngine {
             if (effectiveCompress) {
                 ConsoleLogger.show('debug', 'Decompression enabled (zlib inflate)');
             }
-            const progress = createTqdmBar(label, ciphertextLen);
+            const progress = ProgressBarUtils.create(label, ciphertextLen);
             progress.render();
 
             const cipherStart = sliceStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen;
@@ -1613,7 +1595,7 @@ class CryptoEngine {
     }
 
     async decryptHiddenContainer(inputPath, outputPath, password, { hidden = false, compress = false, keyfileData = null } = {}) {
-        const info = parseHiddenContainerFooterFromPath(inputPath);
+        const info = HeaderParser.parseHiddenFooter(inputPath);
         if (!info) {
             ConsoleLogger.show('error', 'Not a hidden-volume container (missing or invalid CTHV footer).');
             return false;
@@ -1648,16 +1630,16 @@ class CryptoEngine {
         }
 
         const fileSize = fs.statSync(inputPath).size;
-        const footerInfo = parseHiddenContainerFooterFromPath(inputPath);
+        const footerInfo = HeaderParser.parseHiddenFooter(inputPath);
         const outerSpan = footerInfo ? footerInfo.outerTotalLen : fileSize;
-        const result = inspectCT02BlobFromPath(inputPath, { blobStart: 0, blobSpan: outerSpan });
+        const result = HeaderParser.inspectBlob(inputPath, { blobStart: 0, blobSpan: outerSpan });
         result.fileSize = fileSize;
         result.container = footerInfo ? 'hidden' : 'standard';
 
         if (footerInfo) {
             result.outerBlobSize = footerInfo.outerTotalLen;
             result.hiddenBlobSize = footerInfo.hiddenLen;
-            result.hiddenMetadata = inspectCT02BlobFromPath(inputPath, {
+            result.hiddenMetadata = HeaderParser.inspectBlob(inputPath, {
                 blobStart: footerInfo.hiddenStart,
                 blobSpan: footerInfo.hiddenLen
             });
@@ -1690,13 +1672,13 @@ class CryptoEngine {
             const nonce = crypto.randomBytes(Config.NONCE_SIZE);
             const key = await this._deriveKey('threshold-dummy', salt, null, kdfType, iterations);
 
-            const header = buildHeader({ compress, useKeyfile: keyfileData !== null, kdfId: kdfType, iterations });
+            const header = HeaderParser.buildHeader({ compress, useKeyfile: keyfileData !== null, kdfId: kdfType, iterations });
             header[5] |= Config.FLAG_THRESHOLD;
 
             const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
 
             const label = compress ? '[🔒] Compressing & Encrypting:' : '[🔒] Encrypting:';
-            const progress = createTqdmBar(label, fileSize);
+            const progress = ProgressBarUtils.create(label, fileSize);
             progress.render();
 
             const outputStream = fs.createWriteStream(outputPath);
@@ -1776,7 +1758,7 @@ class CryptoEngine {
             let prefix = Buffer.alloc(Math.min(Config.FIXED_HEADER_SIZE, fileSize));
             fs.readSync(fd, prefix, 0, prefix.length, sliceStart);
 
-            const metadata = parseFormatFromBuffer(prefix, { textPayload: false });
+            const metadata = HeaderParser.parseFormat(prefix, { textPayload: false });
             if (!(metadata.flags & Config.FLAG_THRESHOLD)) {
                 throw new Error('File is not encrypted with threshold mode');
             }
@@ -1835,7 +1817,7 @@ class CryptoEngine {
 
             const effectiveCompress = metadata.compress;
             const label = effectiveCompress ? '[🔓] Decrypting & Decompressing:' : '[🔓] Decrypting:';
-            const progress = createTqdmBar(label, ciphertextLen);
+            const progress = ProgressBarUtils.create(label, ciphertextLen);
             progress.render();
             
             progress.tick(ciphertextLen);
@@ -2012,199 +1994,233 @@ class PasswordStrength {
 }
 
 // =========================
-// Password Input Functions
+// =========================
+// PasswordUtils
 // =========================
 
-function getpassWithStrength(prompt = 'Enter Password: ') {
-    const white = TerminalColors.WHITE;
-    const reset = TerminalColors.RESET;
-    process.stdout.write(`${white}[${reset}🔑${white}]${reset} ${prompt}`);
+class PasswordUtils {
+    static #nonTtyPasswordLinesPromise = null;
+    static #nonTtyPasswordLineIndex = 0;
 
-    // Hide cursor
-    process.stdout.write('\x1b[?25l');
-
-    let password = '';
-
-    // Check if stdin supports raw mode (TTY)
-    if (!process.stdin.isTTY) {
-        return readNonTtyPasswordLine().then((line) => {
-            process.stdout.write('\x1b[?25h\n');
-            return line;
-        });
-    }
-
-    // TTY: use raw mode for interactive password input
-    return new Promise((resolve) => {
-        process.stdin.setRawMode(true);
-        process.stdin.resume();
-
-        function updateDisplay() {
-            const strengthIndicator = PasswordStrength.getIndicator(password);
-            const charTypes = PasswordStrength.getCharTypes(password);
-            const asterisks = '*'.repeat(password.length);
-            process.stdout.write(`\r${white}[${reset}🔑${white}]${reset} ${prompt}${asterisks}  ${strengthIndicator}  ${charTypes}\x1b[K`);
+    static _readNonTtyPasswordLine() {
+        if (!PasswordUtils.#nonTtyPasswordLinesPromise) {
+            PasswordUtils.#nonTtyPasswordLinesPromise = new Promise((resolve, reject) => {
+                let data = '';
+                process.stdin.setEncoding('utf8');
+                process.stdin.on('data', (chunk) => {
+                    data += chunk;
+                });
+                process.stdin.on('end', () => {
+                    resolve(data.split(/\r?\n/));
+                });
+                process.stdin.on('error', reject);
+            });
         }
 
-        process.stdin.on('data', (char) => {
-            char = char.toString('utf-8');
-
-            if (char === '\r' || char === '\n' || char.charCodeAt(0) === 13) {
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdout.write('\x1b[?25h\n');
-                process.stdin.removeAllListeners('data');
-                resolve(password);
-            } else if (char.charCodeAt(0) === 3) {
-                // Ctrl+C
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdout.write('\x1b[?25h\n');
-                process.stdin.removeAllListeners('data');
-                process.exit(0);
-            } else if (char.charCodeAt(0) === 4) {
-                // Ctrl+D
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdout.write('\x1b[?25h\n');
-                process.stdin.removeAllListeners('data');
-                resolve(password);
-            } else if (char.charCodeAt(0) === 127 || char.charCodeAt(0) === 8) {
-                // Backspace
-                if (password.length > 0) {
-                    password = password.slice(0, -1);
-                    updateDisplay();
-                }
-            } else if (char >= ' ' && char.length === 1) {
-                password += char;
-                updateDisplay();
+        return PasswordUtils.#nonTtyPasswordLinesPromise.then((lines) => {
+            if (PasswordUtils.#nonTtyPasswordLineIndex >= lines.length) {
+                return '';
             }
+            const line = lines[PasswordUtils.#nonTtyPasswordLineIndex];
+            PasswordUtils.#nonTtyPasswordLineIndex += 1;
+            return line.trim();
         });
-    });
-}
-
-async function getpassVerifyWithStrength(prompt1 = 'Enter Password: ', prompt2 = 'Verify Password: ') {
-    const white = TerminalColors.WHITE;
-    const reset = TerminalColors.RESET;
-
-    const password = await getpassWithStrength(prompt1);
-
-    if (!password) {
-        ConsoleLogger.show('error', 'Password cannot be empty.');
-        ConsoleLogger.show('error', 'Operation aborted: No password provided');
-        process.exit(1);
     }
 
-    ConsoleLogger.show('info', 'Password entered by user', '🔑');
+    static normalize(passwordValue) {
+        if (Array.isArray(passwordValue)) {
+            return passwordValue[0] || '';
+        }
+        return passwordValue || '';
+    }
 
-    process.stdout.write(`${white}[${reset}🔄${white}]${reset} ${prompt2}`);
-    process.stdout.write('\x1b[?25l');
+    static async prompt(prompt = 'Enter Password: ') {
+        const white = TerminalColors.WHITE;
+        const reset = TerminalColors.RESET;
+        process.stdout.write(`${white}[${reset}🔑${white}]${reset} ${prompt}`);
 
-    let password2 = '';
+        // Hide cursor
+        process.stdout.write('\x1b[?25l');
 
-    // Check if stdin supports raw mode (TTY)
-    if (!process.stdin.isTTY) {
-        // Non-TTY: fall back to simple line input
+        let password = '';
+
+        // Check if stdin supports raw mode (TTY)
+        if (!process.stdin.isTTY) {
+            return PasswordUtils._readNonTtyPasswordLine().then((line) => {
+                process.stdout.write('\x1b[?25h\n');
+                return line;
+            });
+        }
+
+        // TTY: use raw mode for interactive password input
         return new Promise((resolve) => {
-            const rl = readline.createInterface({
-                input: process.stdin,
-                terminal: false
-            });
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
 
-            rl.on('line', (line) => {
-                process.stdout.write('\x1b[?25h\n');
-                rl.close();
-                password2 = line.trim();
+            function updateDisplay() {
+                const strengthIndicator = PasswordStrength.getIndicator(password);
+                const charTypes = PasswordStrength.getCharTypes(password);
+                const asterisks = '*'.repeat(password.length);
+                process.stdout.write(`\r${white}[${reset}🔑${white}]${reset} ${prompt}${asterisks}  ${strengthIndicator}  ${charTypes}\x1b[K`);
+            }
 
-                if (password !== password2) {
-                    ConsoleLogger.show('error', 'Passwords do not match!');
-                    ConsoleLogger.show('error', 'Operation aborted due to password mismatch');
-                    process.exit(1);
-                }
-                resolve(password2);
-            });
+            process.stdin.on('data', (char) => {
+                char = char.toString('utf-8');
 
-            rl.on('close', () => {
-                // If stream closed without input, use the first password (for single-line input)
-                if (!password2) {
-                    password2 = password;
+                if (char === '\r' || char === '\n' || char.charCodeAt(0) === 13) {
+                    process.stdin.setRawMode(false);
+                    process.stdin.pause();
+                    process.stdout.write('\x1b[?25h\n');
+                    process.stdin.removeAllListeners('data');
+                    resolve(password);
+                } else if (char.charCodeAt(0) === 3) {
+                    // Ctrl+C
+                    process.stdin.setRawMode(false);
+                    process.stdin.pause();
+                    process.stdout.write('\x1b[?25h\n');
+                    process.stdin.removeAllListeners('data');
+                    process.exit(0);
+                } else if (char.charCodeAt(0) === 4) {
+                    // Ctrl+D
+                    process.stdin.setRawMode(false);
+                    process.stdin.pause();
+                    process.stdout.write('\x1b[?25h\n');
+                    process.stdin.removeAllListeners('data');
+                    resolve(password);
+                } else if (char.charCodeAt(0) === 127 || char.charCodeAt(0) === 8) {
+                    // Backspace
+                    if (password.length > 0) {
+                        password = password.slice(0, -1);
+                        updateDisplay();
+                    }
+                } else if (char >= ' ' && char.length === 1) {
+                    password += char;
+                    updateDisplay();
                 }
-                if (password !== password2) {
-                    ConsoleLogger.show('error', 'Passwords do not match!');
-                    ConsoleLogger.show('error', 'Operation aborted due to password mismatch');
-                    process.exit(1);
-                }
-                resolve(password2);
             });
         });
     }
 
-    // TTY: use raw mode for interactive password input
-    return new Promise((resolve) => {
-        process.stdin.setRawMode(true);
-        process.stdin.resume();
+    static async verify(prompt1 = 'Enter Password: ', prompt2 = 'Verify Password: ') {
+        const white = TerminalColors.WHITE;
+        const reset = TerminalColors.RESET;
 
-        function updateDisplay() {
-            const strengthIndicator = PasswordStrength.getIndicator(password2);
-            const charTypes = PasswordStrength.getCharTypes(password2);
-            const asterisks = '*'.repeat(password2.length);
-            process.stdout.write(`\r${white}[${reset}🔄${white}]${reset} ${prompt2}${asterisks}  ${strengthIndicator}  ${charTypes}\x1b[K`);
-        }
+        const password = await PasswordUtils.prompt(prompt1);
 
-        process.stdin.on('data', (char) => {
-            char = char.toString('utf-8');
-
-            if (char === '\r' || char === '\n' || char.charCodeAt(0) === 13) {
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdout.write('\x1b[?25h\n');
-                process.stdin.removeAllListeners('data');
-
-                if (password !== password2) {
-                    ConsoleLogger.show('error', 'Passwords do not match!');
-                    ConsoleLogger.show('error', 'Operation aborted due to password mismatch');
-                    process.exit(1);
-                }
-                resolve(password2);
-            } else if (char.charCodeAt(0) === 3) {
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdout.write('\x1b[?25h\n');
-                process.stdin.removeAllListeners('data');
-                process.exit(0);
-            } else if (char.charCodeAt(0) === 4) {
-                process.stdin.setRawMode(false);
-                process.stdin.pause();
-                process.stdout.write('\x1b[?25h\n');
-                process.stdin.removeAllListeners('data');
-                resolve(password2);
-            } else if (char.charCodeAt(0) === 127 || char.charCodeAt(0) === 8) {
-                if (password2.length > 0) {
-                    password2 = password2.slice(0, -1);
-                    updateDisplay();
-                }
-            } else if (char >= ' ' && char.length === 1) {
-                password2 += char;
-                updateDisplay();
-            }
-        });
-    });
-}
-
-// =========================
-// Threshold Password Collection
-// =========================
-
-async function getThresholdPasswords(numPasswords, threshold, providedPasswords) {
-    const passwords = providedPasswords ? [...providedPasswords] : [];
-    for (let i = passwords.length; i < numPasswords; i++) {
-        const pw = await getpassWithStrength(`Enter password ${i + 1}/${numPasswords}: `);
-        if (!pw) {
-            ConsoleLogger.show('error', 'Password cannot be empty');
+        if (!password) {
+            ConsoleLogger.show('error', 'Password cannot be empty.');
+            ConsoleLogger.show('error', 'Operation aborted: No password provided');
             process.exit(1);
         }
-        passwords.push(pw);
+
+        ConsoleLogger.show('info', 'Password entered by user', '🔑');
+
+        process.stdout.write(`${white}[${reset}🔄${white}]${reset} ${prompt2}`);
+        process.stdout.write('\x1b[?25l');
+
+        let password2 = '';
+
+        // Check if stdin supports raw mode (TTY)
+        if (!process.stdin.isTTY) {
+            // Non-TTY: fall back to simple line input
+            return new Promise((resolve) => {
+                const rl = readline.createInterface({
+                    input: process.stdin,
+                    terminal: false
+                });
+
+                rl.on('line', (line) => {
+                    process.stdout.write('\x1b[?25h\n');
+                    rl.close();
+                    password2 = line.trim();
+
+                    if (password !== password2) {
+                        ConsoleLogger.show('error', 'Passwords do not match!');
+                        ConsoleLogger.show('error', 'Operation aborted due to password mismatch');
+                        process.exit(1);
+                    }
+                    resolve(password2);
+                });
+
+                rl.on('close', () => {
+                    // If stream closed without input, use the first password (for single-line input)
+                    if (!password2) {
+                        password2 = password;
+                    }
+                    if (password !== password2) {
+                        ConsoleLogger.show('error', 'Passwords do not match!');
+                        ConsoleLogger.show('error', 'Operation aborted due to password mismatch');
+                        process.exit(1);
+                    }
+                    resolve(password2);
+                });
+            });
+        }
+
+        // TTY: use raw mode for interactive password input
+        return new Promise((resolve) => {
+            process.stdin.setRawMode(true);
+            process.stdin.resume();
+
+            function updateDisplay() {
+                const strengthIndicator = PasswordStrength.getIndicator(password2);
+                const charTypes = PasswordStrength.getCharTypes(password2);
+                const asterisks = '*'.repeat(password2.length);
+                process.stdout.write(`\r${white}[${reset}🔄${white}]${reset} ${prompt2}${asterisks}  ${strengthIndicator}  ${charTypes}\x1b[K`);
+            }
+
+            process.stdin.on('data', (char) => {
+                char = char.toString('utf-8');
+
+                if (char === '\r' || char === '\n' || char.charCodeAt(0) === 13) {
+                    process.stdin.setRawMode(false);
+                    process.stdin.pause();
+                    process.stdout.write('\x1b[?25h\n');
+                    process.stdin.removeAllListeners('data');
+
+                    if (password !== password2) {
+                        ConsoleLogger.show('error', 'Passwords do not match!');
+                        ConsoleLogger.show('error', 'Operation aborted due to password mismatch');
+                        process.exit(1);
+                    }
+                    resolve(password2);
+                } else if (char.charCodeAt(0) === 3) {
+                    process.stdin.setRawMode(false);
+                    process.stdin.pause();
+                    process.stdout.write('\x1b[?25h\n');
+                    process.stdin.removeAllListeners('data');
+                    process.exit(0);
+                } else if (char.charCodeAt(0) === 4) {
+                    process.stdin.setRawMode(false);
+                    process.stdin.pause();
+                    process.stdout.write('\x1b[?25h\n');
+                    process.stdin.removeAllListeners('data');
+                    resolve(password2);
+                } else if (char.charCodeAt(0) === 127 || char.charCodeAt(0) === 8) {
+                    if (password2.length > 0) {
+                        password2 = password2.slice(0, -1);
+                        updateDisplay();
+                    }
+                } else if (char >= ' ' && char.length === 1) {
+                    password2 += char;
+                    updateDisplay();
+                }
+            });
+        });
     }
-    return passwords;
+
+    static async getThresholdPasswords(numPasswords, threshold, providedPasswords) {
+        const passwords = providedPasswords ? [...providedPasswords] : [];
+        for (let i = passwords.length; i < numPasswords; i++) {
+            const pw = await PasswordUtils.prompt(`Enter password ${i + 1}/${numPasswords}: `);
+            if (!pw) {
+                ConsoleLogger.show('error', 'Password cannot be empty');
+                process.exit(1);
+            }
+            passwords.push(pw);
+        }
+        return passwords;
+    }
 }
 
 // =========================
@@ -2216,7 +2232,7 @@ async function main() {
         .description(Config.DESCRIPTION)
         .version(Config.VERSION)
         .configureHelp({
-            formatHelp: (cmd) => renderNodeHelp(cmd),
+            formatHelp: (cmd) => UIHelpers.renderNodeHelp(cmd),
         })
         .option('-e, --encrypt', 'Encrypt mode (default)', true)
         .option('-d, --decrypt', 'Decrypt mode', false)
@@ -2250,14 +2266,14 @@ async function main() {
     }
 
     const rawArgv = process.argv.slice(2);
-    const cliOverrides = detectCliOverrides(rawArgv);
+    const cliOverrides = ConfigParser.detectCliOverrides(rawArgv);
     program.parse(process.argv);
     const options = program.opts();
     let configPath;
     try {
-        const defaults = loadRuntimeDefaults(options.config);
+        const defaults = ConfigParser.loadDefaults(options.config);
         configPath = defaults.configPath;
-        applyRuntimeDefaults(options, cliOverrides, defaults.configDefaults, defaults.envDefaults);
+        ConfigParser.applyDefaults(options, cliOverrides, defaults.configDefaults, defaults.envDefaults);
     } catch (err) {
         Banner.show();
         ConsoleLogger.show('error', err.message);
@@ -2267,7 +2283,7 @@ async function main() {
     // Handle key file generation
     if (options.generateKeyfile) {
         const keyfilePath = options.generateKeyfile === true ? 'key.txt' : options.generateKeyfile;
-        if (generateKeyfile(keyfilePath)) {
+        if (KeyFileUtils.generate(keyfilePath)) {
             process.exit(0);
         } else {
             process.exit(1);
@@ -2288,7 +2304,7 @@ async function main() {
     if (options.select) {
         const shouldRedrawBanner = Boolean(process.stdin.isTTY && process.stdout.isTTY);
         try {
-            const selectedPath = await selectPathInteractive(options.file || '.');
+            const selectedPath = await UIHelpers.selectPathInteractive(options.file || '.');
             if (!selectedPath) {
                 if (shouldRedrawBanner) {
                     Banner.show();
@@ -2417,8 +2433,8 @@ async function main() {
 
     let fileList = null;
     if (options.file) {
-        const expanded = expandFilePattern(options.file, options.recursive);
-        if (expanded.length === 0 && hasWildcard(options.file)) {
+        const expanded = FileUtils.expandFilePattern(options.file, options.recursive);
+        if (expanded.length === 0 && FileUtils.hasWildcard(options.file)) {
             ConsoleLogger.show('error', `No files matched pattern: ${options.file}`);
             ConsoleLogger.show('error', 'Operation failed: No matching files');
             abort(1);
@@ -2435,7 +2451,7 @@ async function main() {
             ConsoleLogger.show('error', '--hidden-vol cannot be used with --recursive');
             abort(1);
         }
-        const wc = hasWildcard(options.file);
+        const wc = FileUtils.hasWildcard(options.file);
         if (wc || (fileList && fileList.length !== 1)) {
             ConsoleLogger.show('error', '--hidden-vol requires a single decoy file (no wildcards or multi-file batch)');
             abort(1);
@@ -2524,7 +2540,7 @@ async function main() {
         ConsoleLogger.show('info', `Compression: ${compressionStr}`, '📦');
     } else if (options.file) {
         ConsoleLogger.show('debug', `File specified: ${options.file}`);
-        if (!fs.existsSync(options.file) && !hasWildcard(options.file)) {
+        if (!fs.existsSync(options.file) && !FileUtils.hasWildcard(options.file)) {
             ConsoleLogger.show('error', `File not found: ${options.file}`);
             ConsoleLogger.show('error', 'Operation failed: File does not exist');
             ConsoleLogger.show('error', 'Please check the file path and try again');
@@ -2532,7 +2548,7 @@ async function main() {
         }
 
         let isDir = false;
-        if (!hasWildcard(options.file) && fs.existsSync(options.file)) {
+        if (!FileUtils.hasWildcard(options.file) && fs.existsSync(options.file)) {
             isDir = fs.statSync(options.file).isDirectory();
         }
         if (isDir && !options.recursive) {
@@ -2544,7 +2560,7 @@ async function main() {
         const modeStr = options.decrypt ? 'decrypt' : 'encrypt';
         const compressionStr = options.compress ? 'enabled' : 'disabled';
         let displayCompression = compressionStr;
-        if (options.decrypt && !isDir && !hasWildcard(options.file) && fs.existsSync(options.file) && fs.statSync(options.file).isFile()) {
+        if (options.decrypt && !isDir && !FileUtils.hasWildcard(options.file) && fs.existsSync(options.file) && fs.statSync(options.file).isFile()) {
             try {
                 const details = engine.inspectFile(options.file);
                 displayCompression = details.compression;
@@ -2562,7 +2578,7 @@ async function main() {
         } else if (!isDir) {
             if (fileList && fileList.length > 1) {
                 ConsoleLogger.show('info', `Processing files: ${fileList.length}`, '📄');
-            } else if (!hasWildcard(options.file) && fs.existsSync(options.file)) {
+            } else if (!FileUtils.hasWildcard(options.file) && fs.existsSync(options.file)) {
                 const inputSize = fs.statSync(options.file).size;
                 ConsoleLogger.show('info', `Processing file: ${options.file} (${engine._formatSize(inputSize)})`, '📄');
             } else if (fileList && fileList.length === 1) {
@@ -2582,7 +2598,7 @@ async function main() {
     let keyfileData = null;
     if (options.keyfile) {
         ConsoleLogger.show('info', `Using key file: ${options.keyfile}`, '🔐');
-        keyfileData = readKeyfile(options.keyfile);
+        keyfileData = KeyFileUtils.read(options.keyfile);
         if (!keyfileData) {
             ConsoleLogger.show('error', 'Operation aborted: Could not load key file');
             abort(1);
@@ -2621,12 +2637,12 @@ async function main() {
         !options.inspect &&
         !options.hidden &&
         !options.hiddenVol &&
-        !hasWildcard(options.file) &&
+        !FileUtils.hasWildcard(options.file) &&
         fs.existsSync(options.file) &&
         fs.statSync(options.file).isFile()
     ) {
         try {
-            thresholdRequirements = inspectThresholdRequirementsFromPath(options.file);
+            thresholdRequirements = HeaderParser.inspectThreshold(options.file);
         } catch (err) {
             ConsoleLogger.show('debug', `Could not inspect threshold requirements: ${err.message}`);
         }
@@ -2635,7 +2651,7 @@ async function main() {
     // Secure Password Input with Strength Indicator
     if (!options.inspect && options.hiddenVol) {
         if (pwOuter === undefined) {
-            pwOuter = await getpassVerifyWithStrength(
+            pwOuter = await PasswordUtils.verify(
                 'Enter decoy (outer) password: ',
                 'Verify decoy (outer) password: '
             );
@@ -2644,7 +2660,7 @@ async function main() {
             ConsoleLogger.show('debug', 'Decoy password provided via command line');
         }
         if (pwHidden === undefined) {
-            pwHidden = await getpassVerifyWithStrength(
+            pwHidden = await PasswordUtils.verify(
                 'Enter hidden volume password: ',
                 'Verify hidden volume password: '
             );
@@ -2655,7 +2671,7 @@ async function main() {
     } else if (!options.inspect && thresholdRequirements && (!options.password || options.password.length < thresholdRequirements.threshold)) {
         const providedPasswords = options.password || [];
         ConsoleLogger.show('info', `Threshold-encrypted file detected: ${thresholdRequirements.threshold} password(s) required`);
-        options.password = await getThresholdPasswords(
+        options.password = await PasswordUtils.getThresholdPasswords(
             thresholdRequirements.threshold,
             thresholdRequirements.threshold,
             providedPasswords
@@ -2665,10 +2681,10 @@ async function main() {
             options.password = options.passwordHidden;
             ConsoleLogger.show('debug', 'Using --password-hidden for inner decrypt');
         } else if (!options.decrypt) {
-            options.password = await getpassVerifyWithStrength();
+            options.password = await PasswordUtils.verify();
             ConsoleLogger.show('info', 'Password verification entered', '🔄');
         } else {
-            options.password = await getpassWithStrength();
+            options.password = await PasswordUtils.prompt();
             ConsoleLogger.show('info', 'Password entered by user', '🔑');
         }
     } else if (!options.inspect && options.threshold) {
@@ -2676,7 +2692,7 @@ async function main() {
         if (numPasswords < options.threshold) {
             ConsoleLogger.show('info', `Threshold mode: need ${options.threshold} passwords`);
             const providedPasswords = options.password || [];
-            options.password = await getThresholdPasswords(options.threshold, options.threshold, providedPasswords);
+            options.password = await PasswordUtils.getThresholdPasswords(options.threshold, options.threshold, providedPasswords);
         } else {
             ConsoleLogger.show('debug', `Using all ${numPasswords} provided passwords for threshold encryption`);
         }
@@ -2697,7 +2713,7 @@ async function main() {
             const b64Result = result.toString('base64');
             ConsoleLogger.show('success', `Encrypted (Base64): ${b64Result}`);
             if (options.qr) {
-                await renderQrCode(b64Result);
+                await UIHelpers.renderQrCode(b64Result);
             }
             const elapsed = (Date.now() - startTime) / 1000;
             ConsoleLogger.show('info', `Output encrypted text length: ${b64Result.length} characters`);
@@ -2724,7 +2740,7 @@ async function main() {
 
     } else if (options.file) {
         // Recursive Directory Processing
-        if (options.recursive && !hasWildcard(options.file) && fs.existsSync(options.file) && fs.statSync(options.file).isDirectory()) {
+        if (options.recursive && !FileUtils.hasWildcard(options.file) && fs.existsSync(options.file) && fs.statSync(options.file).isDirectory()) {
             const inputDir = options.file;
             const modeStr = options.decrypt ? 'decrypt' : 'encrypt';
             const compressionStr = options.compress ? 'enabled' : 'disabled';
@@ -2736,7 +2752,7 @@ async function main() {
             let failCount = 0;
             const startTime = Date.now();
 
-            const files = walkDir(inputDir);
+            const files = FileUtils.walkDir(inputDir);
             for (const filePath of files) {
                 if (!options.decrypt) {
                     // Skip already encrypted files if in encrypt mode
@@ -2762,7 +2778,7 @@ async function main() {
                     }
 
                     ConsoleLogger.show('info', `Processing: ${filePath}`, '📄');
-                    const foot = parseHiddenContainerFooterFromPath(filePath);
+                    const foot = HeaderParser.parseHiddenFooter(filePath);
                     let result;
                     if (foot) {
                         result = await engine.decryptHiddenContainer(filePath, outPath, options.password, {
@@ -2798,7 +2814,7 @@ async function main() {
             ConsoleLogger.show('info', `Failed: ${failCount}`);
 
             // Display completion summary
-            logCompletionSummary(options.decrypt, successCount, totalOps, elapsed);
+            ConsoleLogger.logCompletionSummary(options.decrypt, successCount, totalOps, elapsed);
 
         } else if (fs.existsSync(options.file) || (fileList && fileList.length > 0)) {
             const targets = (fileList && fileList.length > 0) ? fileList : [options.file];
@@ -2807,7 +2823,7 @@ async function main() {
             const startTime = Date.now();
 
             for (const target of targets) {
-                if (hasWildcard(target)) {
+                if (FileUtils.hasWildcard(target)) {
                     continue;
                 }
                 let stat;
@@ -2852,11 +2868,11 @@ async function main() {
                         );
                     } else {
                         // For non-threshold encryption, extract single password from array
-                        const singlePassword = singlePasswordArg(options.password);
+                        const singlePassword = PasswordUtils.normalize(options.password);
                         ok = await engine.encryptFile(target, outputFile, singlePassword, options.compress, keyfileData, kdfType, iterations);
                     }
                 } else {
-                    const foot = parseHiddenContainerFooterFromPath(target);
+                    const foot = HeaderParser.parseHiddenFooter(target);
                     if (foot) {
                         ok = await engine.decryptHiddenContainer(target, outputFile, options.password, {
                             hidden: options.hidden,
@@ -2892,7 +2908,7 @@ async function main() {
                             );
                         } else {
                             // For non-threshold files, extract single password from array
-                            const singlePassword = singlePasswordArg(options.password);
+                            const singlePassword = PasswordUtils.normalize(options.password);
                             ok = await engine.decryptFile(target, outputFile, singlePassword, options.compress, keyfileData);
                         }
                     }
@@ -2910,7 +2926,7 @@ async function main() {
             const elapsed = (Date.now() - startTime) / 1000;
             const totalOps = successCount + failCount;
 
-            logCompletionSummary(options.decrypt, successCount, totalOps, elapsed);
+            ConsoleLogger.logCompletionSummary(options.decrypt, successCount, totalOps, elapsed);
 
             if (failCount > 0) {
                 abort(1);
@@ -2922,100 +2938,105 @@ async function main() {
     finishSession();
 }
 
-// Helper function to walk directory recursively
-function walkDir(dir) {
-    const results = [];
-    const list = fs.readdirSync(dir);
+// =========================
+// FileUtils
+// =========================
 
-    for (const file of list) {
-        const filePath = path.join(dir, file);
-        let stat;
-        try {
-            stat = fs.statSync(filePath);
-        } catch (err) {
-            continue;
+class FileUtils {
+    static walkDir(dir) {
+        const results = [];
+        const list = fs.readdirSync(dir);
+
+        for (const file of list) {
+            const filePath = path.join(dir, file);
+            let stat;
+            try {
+                stat = fs.statSync(filePath);
+            } catch (err) {
+                continue;
+            }
+
+            if (stat && stat.isDirectory()) {
+                results.push(...FileUtils.walkDir(filePath));
+            } else {
+                results.push(filePath);
+            }
         }
 
-        if (stat && stat.isDirectory()) {
-            results.push(...walkDir(filePath));
+        return results;
+    }
+
+    static hasWildcard(p) {
+        return /[*?[\]]/.test(p);
+    }
+
+    static globToRegex(globPattern) {
+        let regex = '^';
+        let inClass = false;
+        for (let i = 0; i < globPattern.length; i++) {
+            const ch = globPattern[i];
+            if (ch === '\\') {
+                regex += '\\\\';
+            } else if (ch === '[') {
+                inClass = true;
+                regex += ch;
+            } else if (ch === ']') {
+                inClass = false;
+                regex += ch;
+            } else if (ch === '*' && !inClass) {
+                regex += '.*';
+            } else if (ch === '?' && !inClass) {
+                regex += '.';
+            } else {
+                regex += ch.replace(/[.+^${}()|]/g, '\\$&');
+            }
+        }
+        regex += '$';
+        return new RegExp(regex, 'i');
+    }
+
+    static expandFilePattern(pattern, recursive) {
+        if (!FileUtils.hasWildcard(pattern)) {
+            return [pattern];
+        }
+
+        const baseDir = path.dirname(pattern);
+        const namePattern = path.basename(pattern);
+
+        if (FileUtils.hasWildcard(baseDir)) {
+            return [];
+        }
+
+        const targetDir = baseDir === '.' ? process.cwd() : baseDir;
+        const matcher = FileUtils.globToRegex(namePattern);
+        let candidates = [];
+
+        if (recursive) {
+            candidates = FileUtils.walkDir(targetDir);
         } else {
-            results.push(filePath);
+            const entries = fs.readdirSync(targetDir);
+            candidates = entries.map((e) => path.join(targetDir, e));
         }
-    }
 
-    return results;
-}
-
-function hasWildcard(p) {
-    return /[*?[\]]/.test(p);
-}
-
-function globToRegex(globPattern) {
-    let regex = '^';
-    let inClass = false;
-    for (let i = 0; i < globPattern.length; i++) {
-        const ch = globPattern[i];
-        if (ch === '\\') {
-            regex += '\\\\';
-        } else if (ch === '[') {
-            inClass = true;
-            regex += ch;
-        } else if (ch === ']') {
-            inClass = false;
-            regex += ch;
-        } else if (ch === '*' && !inClass) {
-            regex += '.*';
-        } else if (ch === '?' && !inClass) {
-            regex += '.';
-        } else {
-            regex += ch.replace(/[.+^${}()|]/g, '\\$&');
+        const matches = [];
+        for (const filePath of candidates) {
+            if (FileUtils.hasWildcard(filePath)) {
+                continue;
+            }
+            let stat;
+            try {
+                stat = fs.statSync(filePath);
+            } catch (err) {
+                continue;
+            }
+            if (!stat.isFile()) continue;
+            const name = path.basename(filePath);
+            if (matcher.test(name)) {
+                matches.push(filePath);
+            }
         }
+        return matches;
     }
-    regex += '$';
-    return new RegExp(regex, 'i');
-}
-
-function expandFilePattern(pattern, recursive) {
-    if (!hasWildcard(pattern)) {
-        return [pattern];
-    }
-
-    const baseDir = path.dirname(pattern);
-    const namePattern = path.basename(pattern);
-
-    if (hasWildcard(baseDir)) {
-        return [];
-    }
-
-    const targetDir = baseDir === '.' ? process.cwd() : baseDir;
-    const matcher = globToRegex(namePattern);
-    let candidates = [];
-
-    if (recursive) {
-        candidates = walkDir(targetDir);
-    } else {
-        const entries = fs.readdirSync(targetDir);
-        candidates = entries.map((e) => path.join(targetDir, e));
-    }
-
-    const matches = [];
-    for (const filePath of candidates) {
-        if (hasWildcard(filePath)) {
-            continue;
-        }
-        let stat;
-        try {
-            stat = fs.statSync(filePath);
-        } catch (err) {
-            continue;
-        }
-        if (!stat.isFile()) continue;
-        const name = path.basename(filePath);
-        if (matcher.test(name)) {
-            matches.push(filePath);
-        }
-    }
-    return matches;
 }
 
 if (require.main === module) {
@@ -3026,8 +3047,17 @@ if (require.main === module) {
 } else {
     module.exports = {
         main,
-        renderQrCode,
-        selectPathInteractive,
-        renderNodeHelp,
+        UIHelpers,
+        ConsoleLogger,
+        ConfigParser,
+        HeaderParser,
+        KeyFileUtils,
+        PasswordUtils,
+        CryptoEngine,
+        Config,
+        ShamirSecretSharing,
+        Banner,
+        FileUtils,
+        ProgressBarUtils,
     };
 }

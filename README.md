@@ -350,7 +350,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.6.0 Specifications
+### Version 2.6.1 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -394,7 +394,14 @@ This tool improves upon older implementations by:
 ### Main Classes
 | Class | Description |
 |-------|-------------|
+| `GaloisField` | GF(2^8) arithmetic for Shamir's Secret Sharing |
 | `Config` | Stores constants like key size, salt, nonce, tag sizes, and PBKDF2 iterations |
+| `ConfigParser` | Config file loading, CLI defaults, environment variable handling |
+| `HeaderParser` | CT02 header building/parsing, format detection, hidden footer inspection |
+| `KeyFileUtils` | Key file generation, reading, and password combination |
+| `UIHelpers` | Terminal UI helpers: QR codes, file selection, color output |
+| `PasswordUtils` | Password prompting with strength indicators and verification |
+| `PasswordStrength` | Password strength analysis and classification |
 | `CryptoEngine` | Core of the application. Manages key derivation, encryption, and decryption |
 | `Banner` | Displays random ASCII art banners on startup |
 | `ConsoleLogger` | Unified console and file logging with emojis and colors |
@@ -471,4 +478,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.6.0
+**Version**: 2.6.1

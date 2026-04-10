@@ -16,7 +16,7 @@ from crypt_tools import (
 	ConsoleLogger,
 	ShamirSecretSharing,
 	main,
-	parse_hidden_container_footer_from_path,
+	HeaderParser,
 )
 
 
@@ -180,7 +180,7 @@ def test_hidden_container_roundtrip(engine):
 			secret_path
 		)
 
-		info = parse_hidden_container_footer_from_path(cont_path)
+		info = HeaderParser.parse_hidden_footer(cont_path)
 		assert info is not None
 		assert info['outerTotalLen'] > 0
 		assert info['hiddenLen'] > 0
@@ -261,7 +261,7 @@ def test_parse_footer_returns_none_for_standard_file(engine):
 		with open(input_path, 'wb') as f:
 			f.write(content)
 		assert engine.encrypt_file(input_path, enc_path, password)
-		assert parse_hidden_container_footer_from_path(enc_path) is None
+		assert HeaderParser.parse_hidden_footer(enc_path) is None
 		meta = engine.inspect_file(enc_path)
 		assert meta['container'] == 'standard'
 	finally:
@@ -339,11 +339,15 @@ def test_file_decryption_wrong_password_removes_output(engine):
 @pytest.fixture
 def mock_getpass(monkeypatch):
 	# Simple mock: Always returns 'cli_pass' for both prompt styles.
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': 'cli_pass')
 	monkeypatch.setattr(
-		crypt_tools,
-		'getpass_verify_with_strength',
-		lambda prompt1='Enter Password: ', prompt2='Verify Password: ': 'cli_pass',
+		crypt_tools.PasswordUtils,
+		'prompt_with_strength',
+		staticmethod(lambda: 'cli_pass'),
+	)
+	monkeypatch.setattr(
+		crypt_tools.PasswordUtils,
+		'verify_with_strength',
+		staticmethod(lambda: 'cli_pass'),
 	)
 
 
@@ -436,7 +440,7 @@ def test_cli_decrypt_threshold_file_prompts_required_password_count(monkeypatch,
 			prompted.append(prompt)
 			return next(answers)
 
-		monkeypatch.setattr(crypt_tools, 'getpass_with_strength', fake_getpass)
+		monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', fake_getpass)
 
 		main(['--decrypt', '-f', enc_path])
 
@@ -512,7 +516,7 @@ def test_cli_encrypt_text_with_qr(monkeypatch, capsys):
 	def fake_show_qr_code(data):
 		rendered['data'] = data
 
-	monkeypatch.setattr(crypt_tools, 'show_qr_code', fake_show_qr_code)
+	monkeypatch.setattr(crypt_tools.UIHelpers, 'show_qr', fake_show_qr_code)
 
 	main(['--encrypt', '-t', 'hello', '-p', 'pw', '--qr'])
 
@@ -542,7 +546,7 @@ def test_render_qr_code_uses_compact_terminal_blocks(monkeypatch):
 
 	monkeypatch.setattr(crypt_tools.qrcode, 'QRCode', DummyQRCode)
 
-	rendered = crypt_tools.render_qr_code('hello')
+	rendered = crypt_tools.UIHelpers.render_qr('hello')
 
 	assert rendered == '▀▄▀'
 
@@ -562,7 +566,7 @@ def test_cli_select_uses_interactive_selector(monkeypatch, tmp_path):
 	infile = tmp_path / 'chosen.txt'
 	infile.write_text('selected content', encoding='utf-8')
 
-	monkeypatch.setattr(crypt_tools, 'interactive_file_selector', lambda start='.': str(infile))
+	monkeypatch.setattr(crypt_tools.UIHelpers, 'file_selector', lambda start='.': str(infile))
 
 	main(['--encrypt', '--select', '-p', 'pw'])
 
@@ -792,11 +796,11 @@ def test_ensure_utf8_wrap_and_passthrough():
 			self.buffer = io.BytesIO()
 
 	stream = FakeStream()
-	wrapped = crypt_tools.ensure_utf8(stream)
+	wrapped = crypt_tools.UIHelpers.ensure_utf8(stream)
 	assert wrapped.encoding == 'utf-8'
 
 	utf8_stream = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
-	assert crypt_tools.ensure_utf8(utf8_stream) is utf8_stream
+	assert crypt_tools.UIHelpers.ensure_utf8(utf8_stream) is utf8_stream
 
 
 def test_import_error_missing_deps(monkeypatch, capsys):
@@ -863,7 +867,7 @@ def test_password_strength_indicator_and_types():
 def test_getpass_with_strength_fallback(monkeypatch):
 	monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
 	monkeypatch.setattr(crypt_tools.getpass, 'getpass', lambda prompt='': 'pw')
-	assert crypt_tools.getpass_with_strength() == 'pw'
+	assert crypt_tools.PasswordUtils.prompt_with_strength() == 'pw'
 
 
 def _make_win_getch(seq):
@@ -898,7 +902,7 @@ def test_getpass_with_strength_win32_sequence(monkeypatch):
 	monkeypatch.setattr(sys, 'platform', 'win32')
 	monkeypatch.setattr(msvcrt, 'getch', _make_win_getch(seq))
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
-	assert crypt_tools.getpass_with_strength() == 'B'
+	assert crypt_tools.PasswordUtils.prompt_with_strength() == 'B'
 
 
 def test_getpass_with_strength_win32_ctrl_c(monkeypatch):
@@ -909,7 +913,7 @@ def test_getpass_with_strength_win32_ctrl_c(monkeypatch):
 	monkeypatch.setattr(msvcrt, 'getch', _make_win_getch([b'\x03']))
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_with_strength()
+		crypt_tools.PasswordUtils.prompt_with_strength()
 
 
 def test_getpass_with_strength_unix_sequence(monkeypatch):
@@ -937,7 +941,7 @@ def test_getpass_with_strength_unix_sequence(monkeypatch):
 	monkeypatch.setitem(sys.modules, 'termios', fake_termios)
 	monkeypatch.setitem(sys.modules, 'tty', fake_tty)
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
-	assert crypt_tools.getpass_with_strength() == 'B'
+	assert crypt_tools.PasswordUtils.prompt_with_strength() == 'B'
 
 
 def test_getpass_with_strength_unix_ctrl_c(monkeypatch):
@@ -966,7 +970,7 @@ def test_getpass_with_strength_unix_ctrl_c(monkeypatch):
 	monkeypatch.setitem(sys.modules, 'tty', fake_tty)
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_with_strength()
+		crypt_tools.PasswordUtils.prompt_with_strength()
 
 
 def test_getpass_with_strength_unix_ctrl_d(monkeypatch):
@@ -994,14 +998,14 @@ def test_getpass_with_strength_unix_ctrl_d(monkeypatch):
 	monkeypatch.setitem(sys.modules, 'termios', fake_termios)
 	monkeypatch.setitem(sys.modules, 'tty', fake_tty)
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
-	assert crypt_tools.getpass_with_strength() == ''
+	assert crypt_tools.PasswordUtils.prompt_with_strength() == ''
 
 
 def test_getpass_verify_with_strength_fallback_empty(monkeypatch):
 	monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
 	monkeypatch.setattr(crypt_tools.getpass, 'getpass', lambda prompt='': '')
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_verify_with_strength()
+		crypt_tools.PasswordUtils.verify_with_strength()
 
 
 def test_getpass_verify_with_strength_fallback_mismatch(monkeypatch):
@@ -1009,14 +1013,14 @@ def test_getpass_verify_with_strength_fallback_mismatch(monkeypatch):
 	answers = iter(['pw1', 'pw2'])
 	monkeypatch.setattr(crypt_tools.getpass, 'getpass', lambda prompt='': next(answers))
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_verify_with_strength()
+		crypt_tools.PasswordUtils.verify_with_strength()
 
 
 def test_getpass_verify_with_strength_fallback_success(monkeypatch):
 	monkeypatch.setattr(sys.stdin, 'isatty', lambda: False)
 	answers = iter(['pw', 'pw'])
 	monkeypatch.setattr(crypt_tools.getpass, 'getpass', lambda prompt='': next(answers))
-	assert crypt_tools.getpass_verify_with_strength() == 'pw'
+	assert crypt_tools.PasswordUtils.verify_with_strength() == 'pw'
 
 
 def test_getpass_verify_with_strength_win32_sequence(monkeypatch):
@@ -1040,17 +1044,17 @@ def test_getpass_verify_with_strength_win32_sequence(monkeypatch):
 
 	monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
 	monkeypatch.setattr(sys, 'platform', 'win32')
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': 'B')
+	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': 'B')
 	monkeypatch.setattr(msvcrt, 'getch', _make_win_getch(seq))
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
-	assert crypt_tools.getpass_verify_with_strength() == 'B'
+	assert crypt_tools.PasswordUtils.verify_with_strength() == 'B'
 
 
 def test_getpass_verify_with_strength_interactive_empty(monkeypatch):
 	monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': '')
+	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': '')
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_verify_with_strength()
+		crypt_tools.PasswordUtils.verify_with_strength()
 
 
 def test_getpass_verify_with_strength_win32_ctrl_c(monkeypatch):
@@ -1058,11 +1062,11 @@ def test_getpass_verify_with_strength_win32_ctrl_c(monkeypatch):
 
 	monkeypatch.setattr(sys.stdin, 'isatty', lambda: True)
 	monkeypatch.setattr(sys, 'platform', 'win32')
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': 'B')
+	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': 'B')
 	monkeypatch.setattr(msvcrt, 'getch', _make_win_getch([b'\x03']))
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_verify_with_strength()
+		crypt_tools.PasswordUtils.verify_with_strength()
 
 
 def test_getpass_verify_with_strength_unix_sequence(monkeypatch):
@@ -1089,9 +1093,9 @@ def test_getpass_verify_with_strength_unix_sequence(monkeypatch):
 	monkeypatch.setattr(sys, 'stdin', FakeStdin(['a', '\b', 'B', '\r']))
 	monkeypatch.setitem(sys.modules, 'termios', fake_termios)
 	monkeypatch.setitem(sys.modules, 'tty', fake_tty)
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': 'B')
+	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': 'B')
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
-	assert crypt_tools.getpass_verify_with_strength() == 'B'
+	assert crypt_tools.PasswordUtils.verify_with_strength() == 'B'
 
 
 def test_getpass_verify_with_strength_unix_ctrl_c(monkeypatch):
@@ -1118,10 +1122,10 @@ def test_getpass_verify_with_strength_unix_ctrl_c(monkeypatch):
 	monkeypatch.setattr(sys, 'stdin', FakeStdin(['\x03']))
 	monkeypatch.setitem(sys.modules, 'termios', fake_termios)
 	monkeypatch.setitem(sys.modules, 'tty', fake_tty)
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': 'B')
+	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': 'B')
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_verify_with_strength()
+		crypt_tools.PasswordUtils.verify_with_strength()
 
 
 def test_getpass_verify_with_strength_unix_ctrl_d_mismatch(monkeypatch):
@@ -1148,10 +1152,10 @@ def test_getpass_verify_with_strength_unix_ctrl_d_mismatch(monkeypatch):
 	monkeypatch.setattr(sys, 'stdin', FakeStdin(['\x04']))
 	monkeypatch.setitem(sys.modules, 'termios', fake_termios)
 	monkeypatch.setitem(sys.modules, 'tty', fake_tty)
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': 'B')
+	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': 'B')
 	monkeypatch.setattr(sys, 'stdout', io.StringIO())
 	with pytest.raises(SystemExit):
-		crypt_tools.getpass_verify_with_strength()
+		crypt_tools.PasswordUtils.verify_with_strength()
 
 
 def test_cli_text_decrypt_no_password(monkeypatch, capsys):
@@ -1159,7 +1163,7 @@ def test_cli_text_decrypt_no_password(monkeypatch, capsys):
 	engine = CryptoEngine()
 	enc = engine.encrypt_data(b'hello', password)
 	b64 = base64.b64encode(enc).decode('utf-8')
-	monkeypatch.setattr(crypt_tools, 'getpass_with_strength', lambda prompt='': password)
+	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': password)
 	main(['--decrypt', '-t', b64])
 	captured = capsys.readouterr()
 	assert 'Decrypted: hello' in captured.out
@@ -1502,10 +1506,8 @@ def test_decrypt_file_error_handling(engine, monkeypatch):
 
 
 def test_generate_keyfile(tmp_path):
-	from crypt_tools import generate_keyfile
-
 	keyfile_path = tmp_path / 'test_key.txt'
-	result = generate_keyfile(str(keyfile_path))
+	result = crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 	assert result is True
 	assert keyfile_path.exists()
 	content = keyfile_path.read_text(encoding='utf-8').strip()
@@ -1514,65 +1516,49 @@ def test_generate_keyfile(tmp_path):
 
 
 def test_read_keyfile(tmp_path):
-	from crypt_tools import read_keyfile, generate_keyfile
-
 	# Generate a keyfile
 	keyfile_path = tmp_path / 'test_key.txt'
-	generate_keyfile(str(keyfile_path))
+	crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 
 	# Read it back
-	key_data = read_keyfile(str(keyfile_path))
+	key_data = crypt_tools.KeyFileUtils.read(str(keyfile_path))
 	assert key_data is not None
 	assert len(key_data) == 16
 
 
 def test_read_keyfile_supports_binary_legacy_format(tmp_path):
-	from crypt_tools import read_keyfile
-
 	keyfile_path = tmp_path / 'legacy_key.bin'
 	keyfile_path.write_bytes(os.urandom(32))
 
-	key_data = read_keyfile(str(keyfile_path))
+	key_data = crypt_tools.KeyFileUtils.read(str(keyfile_path))
 
 	assert key_data is not None
 	assert len(key_data) == 32
 
 
 def test_read_keyfile_not_found():
-	from crypt_tools import read_keyfile
-
-	result = read_keyfile('nonexistent_keyfile.bin')
+	result = crypt_tools.KeyFileUtils.read('nonexistent_keyfile.bin')
 	assert result is None
 
 
 def test_read_keyfile_too_small(tmp_path):
-	from crypt_tools import read_keyfile
-
 	small_key = tmp_path / 'small_key.bin'
 	small_key.write_bytes(b'short')  # Less than 16 bytes
 
-	result = read_keyfile(str(small_key))
+	result = crypt_tools.KeyFileUtils.read(str(small_key))
 	assert result is None
 
 
 def test_combine_password_and_keyfile():
-	from crypt_tools import combine_password_and_keyfile
-
 	password = 'testpassword'
 	keyfile_data = b'keyfiledata12345678'
 
-	result = combine_password_and_keyfile(password, keyfile_data)
+	result = crypt_tools.KeyFileUtils.combine_password_and_keyfile(password, keyfile_data)
 	assert isinstance(result, str)
 	assert len(result) == 64  # SHA256 hex = 64 chars
 
 
 def test_encrypt_decrypt_with_keyfile(tmp_path):
-	from crypt_tools import (
-		generate_keyfile,
-		read_keyfile,
-		CryptoEngine,
-	)
-
 	password = 'mypassword'
 	keyfile_path = tmp_path / 'key.bin'
 	input_file = tmp_path / 'plain.txt'
@@ -1580,13 +1566,13 @@ def test_encrypt_decrypt_with_keyfile(tmp_path):
 	decrypted_file = tmp_path / 'plain.txt.dec'
 
 	# Generate keyfile
-	generate_keyfile(str(keyfile_path))
+	crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 
 	# Create input file
 	input_file.write_text('Secret message for keyfile test')
 
 	# Read keyfile
-	keyfile_data = read_keyfile(str(keyfile_path))
+	keyfile_data = crypt_tools.KeyFileUtils.read(str(keyfile_path))
 
 	# Encrypt with keyfile
 	engine = CryptoEngine()
@@ -1606,25 +1592,19 @@ def test_encrypt_decrypt_with_keyfile(tmp_path):
 
 
 def test_encrypt_decrypt_keyfile_only(tmp_path):
-	from crypt_tools import (
-		generate_keyfile,
-		read_keyfile,
-		CryptoEngine,
-	)
-
 	keyfile_path = tmp_path / 'key.bin'
 	input_file = tmp_path / 'plain.txt'
 	encrypted_file = tmp_path / 'plain.txt.enc'
 	decrypted_file = tmp_path / 'plain.txt.dec'
 
 	# Generate keyfile
-	generate_keyfile(str(keyfile_path))
+	crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 
 	# Create input file
 	input_file.write_text('Message encrypted with keyfile only')
 
 	# Read keyfile
-	keyfile_data = read_keyfile(str(keyfile_path))
+	keyfile_data = crypt_tools.KeyFileUtils.read(str(keyfile_path))
 
 	# Encrypt with empty password but with keyfile
 	engine = CryptoEngine()
@@ -1639,12 +1619,6 @@ def test_encrypt_decrypt_keyfile_only(tmp_path):
 
 
 def test_encrypt_data_with_keyfile():
-	from crypt_tools import (
-		generate_keyfile,
-		read_keyfile,
-		CryptoEngine,
-	)
-
 	password = 'testpassword'
 
 	# Create a temporary keyfile
@@ -1653,8 +1627,8 @@ def test_encrypt_data_with_keyfile():
 	fd, keyfile_path = tempfile.mkstemp()
 	os.close(fd)
 	try:
-		generate_keyfile(keyfile_path)
-		keyfile_data = read_keyfile(keyfile_path)
+		crypt_tools.KeyFileUtils.generate(keyfile_path)
+		keyfile_data = crypt_tools.KeyFileUtils.read(keyfile_path)
 
 		engine = CryptoEngine()
 		data = b'Hello World with keyfile!'
@@ -1697,14 +1671,12 @@ def test_cli_generate_keyfile_default_name(tmp_path):
 
 
 def test_cli_encrypt_with_keyfile(tmp_path):
-	from crypt_tools import generate_keyfile
-
 	password = 'testpass'
 	keyfile_path = tmp_path / 'key.bin'
 	input_file = tmp_path / 'test.txt'
 	encrypted_file = tmp_path / 'test.txt.enc'
 
-	generate_keyfile(str(keyfile_path))
+	crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 	input_file.write_text('Test content')
 
 	main(
@@ -1723,19 +1695,17 @@ def test_cli_encrypt_with_keyfile(tmp_path):
 
 
 def test_cli_decrypt_with_keyfile(tmp_path):
-	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
-
 	password = 'testpass'
 	keyfile_path = tmp_path / 'key.bin'
 	input_file = tmp_path / 'test.txt'
 	encrypted_file = tmp_path / 'test.txt.enc'
 	decrypted_file = tmp_path / 'test.txt.dec'
 
-	generate_keyfile(str(keyfile_path))
+	crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 	input_file.write_text('Test content for decrypt')
 
 	# First encrypt
-	keyfile_data = read_keyfile(str(keyfile_path))
+	keyfile_data = crypt_tools.KeyFileUtils.read(str(keyfile_path))
 	engine = CryptoEngine()
 	engine.encrypt_file(str(input_file), str(encrypted_file), password, False, keyfile_data)
 
@@ -1789,13 +1759,11 @@ def test_cli_missing_keyfile_avoids_duplicate_read_error(capsys):
 
 
 def test_cli_missing_runtime_keyfile_still_shows_session_end(tmp_path, capsys):
-	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
-
 	keyfile_path = tmp_path / 'key.txt'
 	input_file = tmp_path / 'plain.txt'
 	encrypted_file = tmp_path / 'plain.txt.enc'
 
-	generate_keyfile(str(keyfile_path))
+	crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 	input_file.write_text('needs keyfile')
 	engine = CryptoEngine()
 	engine.encrypt_file(
@@ -1803,7 +1771,7 @@ def test_cli_missing_runtime_keyfile_still_shows_session_end(tmp_path, capsys):
 		str(encrypted_file),
 		'pw',
 		False,
-		read_keyfile(str(keyfile_path)),
+		crypt_tools.KeyFileUtils.read(str(keyfile_path)),
 	)
 
 	with pytest.raises(SystemExit) as excinfo:
@@ -1817,16 +1785,14 @@ def test_cli_missing_runtime_keyfile_still_shows_session_end(tmp_path, capsys):
 
 
 def test_inspect_file_shows_keyfile(tmp_path):
-	from crypt_tools import generate_keyfile, read_keyfile, CryptoEngine
-
 	password = 'testpass'
 	keyfile_path = tmp_path / 'key.bin'
 	input_file = tmp_path / 'test.txt'
 	encrypted_file = tmp_path / 'test.txt.enc'
 
-	generate_keyfile(str(keyfile_path))
+	crypt_tools.KeyFileUtils.generate(str(keyfile_path))
 	input_file.write_text('Test')
-	keyfile_data = read_keyfile(str(keyfile_path))
+	keyfile_data = crypt_tools.KeyFileUtils.read(str(keyfile_path))
 
 	engine = CryptoEngine()
 	engine.encrypt_file(str(input_file), str(encrypted_file), password, False, keyfile_data)
@@ -1837,9 +1803,7 @@ def test_inspect_file_shows_keyfile(tmp_path):
 
 
 def test_read_keyfile_missing():
-	import crypt_tools
-
-	result = crypt_tools.read_keyfile('nonexistent_file.bin')
+	result = crypt_tools.KeyFileUtils.read('nonexistent_file.bin')
 	assert result is None
 
 

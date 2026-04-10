@@ -333,7 +333,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 
 ## Technical Details
 
-### Version 2.6.0 Specifications
+### Version 2.6.1 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -377,11 +377,14 @@ This tool improves upon older implementations by:
 ### Main Classes
 | Class | Description |
 |-------|-------------|
+| `GaloisField` | GF(2^8) arithmetic for Shamir's Secret Sharing (Python edition only; Node.js uses inline static methods) |
 | `Config` | Stores constants like key size, salt, nonce, tag sizes, and PBKDF2 iterations |
 | `CryptoEngine` | Core of the application. Manages key derivation, encryption, and decryption |
 | `Banner` | Displays random ASCII art banners on startup |
 | `ConsoleLogger` | Unified console and file logging with emojis and colors |
 | `TerminalColors` | ANSI color codes for terminal output |
+
+**Note:** The Python edition has been refactored into utility classes (`ConfigParser`, `HeaderParser`, `KeyFileUtils`, `UIHelpers`, `PasswordUtils`) for better organization. The Node.js edition retains its current structure but will be refactored in a future update.
 
 ### CryptoEngine Methods
 | Method | Description |
@@ -436,4 +439,4 @@ ncc build crypt_tools.js -o dist
 ---
 
 **Author**: Center For Cyber Intelligence
-**Version**: 2.6.0
+**Version**: 2.6.1

@@ -53,47 +53,51 @@ except ImportError:
 
 
 # Reconfigure stdout/stderr to use UTF-8 encoding (supports emojis)
-def ensure_utf8(stream):
+def _ensure_utf8_temp(stream):
 	if stream.encoding != 'utf-8':
 		return io.TextIOWrapper(stream.buffer, encoding='utf-8', errors='replace')
 	return stream
 
 
-sys.stdout = ensure_utf8(sys.stdout)
-sys.stderr = ensure_utf8(sys.stderr)
+sys.stdout = _ensure_utf8_temp(sys.stdout)
+sys.stderr = _ensure_utf8_temp(sys.stderr)
 
 # =========================
 # Shamir's Secret Sharing
 # =========================
 
 
-def gf256_mul(a, b):
-	result = 0
-	while b:
-		if b & 1:
-			result ^= a
-		a = (a << 1) ^ (0x11B if a & 0x80 else 0)
-		b >>= 1
-	return result & 0xFF
+class GaloisField:
+	"""GF(2^8) arithmetic for Shamir's Secret Sharing."""
 
+	@staticmethod
+	def mul(a, b):
+		result = 0
+		while b:
+			if b & 1:
+				result ^= a
+			a = (a << 1) ^ (0x11B if a & 0x80 else 0)
+			b >>= 1
+		return result & 0xFF
 
-def gf256_exp(base, exp):
-	result = 1
-	for _ in range(exp):
-		result = gf256_mul(result, base)
-	return result
+	@staticmethod
+	def exp(base, exp):
+		result = 1
+		for _ in range(exp):
+			result = GaloisField.mul(result, base)
+		return result
 
+	@staticmethod
+	def inv(a):
+		if a == 0:
+			return 0
+		return GaloisField.exp(a, 254)
 
-def gf256_inv(a):
-	if a == 0:
-		return 0
-	return gf256_exp(a, 254)
-
-
-def gf256_div(a, b):
-	if b == 0:
-		raise ValueError('Division by zero')
-	return gf256_mul(a, gf256_inv(b))
+	@staticmethod
+	def div(a, b):
+		if b == 0:
+			raise ValueError('Division by zero')
+		return GaloisField.mul(a, GaloisField.inv(b))
 
 
 class ShamirSecretSharing:
@@ -117,7 +121,7 @@ class ShamirSecretSharing:
 			for j in range(len(secret)):
 				y = secret[j]
 				for deg in range(1, threshold):
-					y ^= gf256_mul(coeffs[deg - 1], gf256_exp(x, deg))
+					y ^= GaloisField.mul(coeffs[deg - 1], GaloisField.exp(x, deg))
 				share[j + 1] = y
 
 			shares.append(bytes(share))
@@ -144,10 +148,10 @@ class ShamirSecretSharing:
 				den = 1
 				for m in range(len(shares)):
 					if m != i:
-						num = gf256_mul(num, x_vals[m])
-						den = gf256_mul(den, x_vals[m] ^ x_vals[i])
-				li = gf256_div(num, den)
-				result ^= gf256_mul(y_vals[i], li)
+						num = GaloisField.mul(num, x_vals[m])
+						den = GaloisField.mul(den, x_vals[m] ^ x_vals[i])
+				li = GaloisField.div(num, den)
+				result ^= GaloisField.mul(y_vals[i], li)
 
 			secret[j] = result
 
@@ -164,7 +168,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.6.0'
+	VERSION = '2.6.1'
 
 	# File format
 	MAGIC = b'CT02'
@@ -214,141 +218,6 @@ class TerminalColors:
 		CYAN = '\033[96m'
 		MAGENTA = '\033[95m'
 		WHITE = '\033[97m'
-
-
-def _help_use_color() -> bool:
-	return sys.stdout.isatty()
-
-
-def _help_style(text: str, color: str) -> str:
-	if not _help_use_color():
-		return text
-	return f'{color}{text}{TerminalColors.RESET}'
-
-
-def _help_heading(icon: str, title: str, color: str = TerminalColors.Foreground.CYAN) -> str:
-	return _help_style(f'{icon} {title}', color)
-
-
-def render_qr_code(data: str) -> str:
-	"""Render a string as a terminal-friendly QR code."""
-	if not QRCODE_AVAILABLE:
-		raise RuntimeError('QR code support is not available. Please install the qrcode package.')
-
-	qr = qrcode.QRCode(border=1)
-	qr.add_data(data)
-	qr.make(fit=True)
-	matrix = qr.get_matrix()
-	lines = []
-	for row_index in range(0, len(matrix), 2):
-		top_row = matrix[row_index]
-		bottom_row = matrix[row_index + 1] if row_index + 1 < len(matrix) else [False] * len(top_row)
-		line = []
-		for top_cell, bottom_cell in zip(top_row, bottom_row):
-			if top_cell and bottom_cell:
-				line.append('█')
-			elif top_cell:
-				line.append('▀')
-			elif bottom_cell:
-				line.append('▄')
-			else:
-				line.append(' ')
-		lines.append(''.join(line).rstrip())
-	return '\n'.join(lines)
-
-
-def show_qr_code(data: str) -> None:
-	"""Print a rendered QR code to stdout."""
-	ConsoleLogger.show('info', 'QR Code Output:', icon='🔳', log_file=False)
-	print(render_qr_code(data))
-
-
-def interactive_file_selector(start_path: str = '.') -> Optional[str]:
-	"""Open a simple terminal file selector and return the chosen path."""
-	if not BLESSED_AVAILABLE:
-		raise RuntimeError(
-			'Interactive file selection is not available. Please install the blessed package.'
-		)
-	if not sys.stdin.isatty() or not sys.stdout.isatty():
-		raise RuntimeError('Interactive file selection requires an interactive terminal.')
-
-	term = Terminal()
-	current_dir = os.path.abspath(start_path if os.path.isdir(start_path) else os.path.dirname(start_path) or '.')
-	selected_index = 0
-	scroll_offset = 0
-	entries = []
-
-	def build_entries(directory: str):
-		parent_dir = os.path.dirname(directory)
-		items = [
-			{
-				'label': f'📁 [.] Select current directory: {directory}',
-				'path': directory,
-				'action': 'select',
-			},
-			{'label': '⬆️  [..] Go to parent directory', 'path': parent_dir, 'action': 'up'},
-		]
-		for name in sorted(os.listdir(directory), key=lambda item: (not os.path.isdir(os.path.join(directory, item)), item.lower())):
-			full_path = os.path.join(directory, name)
-			if os.path.isdir(full_path):
-				items.append({'label': f'📁 {name}', 'path': full_path, 'action': 'enter'})
-			else:
-				items.append({'label': f'📄 {name}', 'path': full_path, 'action': 'select'})
-		return items
-
-	def render_screen():
-		nonlocal scroll_offset
-		height = max(term.height - 6, 5)
-		scroll_offset = min(scroll_offset, max(len(entries) - height, 0))
-		if selected_index < scroll_offset:
-			scroll_offset = selected_index
-		if selected_index >= scroll_offset + height:
-			scroll_offset = selected_index - height + 1
-
-		lines = [
-			term.clear,
-			term.bold_cyan('Crypt Tools Interactive File Selection'),
-			term.white(f'Current directory: {current_dir}'),
-			term.yellow('Use ↑/↓ to move, Enter to open/select, Backspace/← for parent, q to cancel.'),
-			'',
-		]
-		visible_entries = entries[scroll_offset : scroll_offset + height]
-		for idx, entry in enumerate(visible_entries, start=scroll_offset):
-			prefix = '➜ ' if idx == selected_index else '  '
-			style = term.black_on_cyan if idx == selected_index else (lambda text: text)
-			lines.append(style(f'{prefix}{entry["label"]}'))
-		print('\n'.join(lines), end='', flush=True)
-
-	with term.fullscreen(), term.cbreak(), term.hidden_cursor():
-		while True:
-			entries = build_entries(current_dir)
-			selected_index = max(0, min(selected_index, len(entries) - 1))
-			render_screen()
-			key = term.inkey()
-			if key.name in ['KEY_UP'] and selected_index > 0:
-				selected_index -= 1
-			elif key.name in ['KEY_DOWN'] and selected_index < len(entries) - 1:
-				selected_index += 1
-			elif key.name in ['KEY_LEFT', 'KEY_BACKSPACE']:
-				current_dir = os.path.dirname(current_dir)
-				selected_index = 0
-				scroll_offset = 0
-			elif key.name == 'KEY_ENTER' or key == '\n' or key == '\r':
-				entry = entries[selected_index]
-				if entry['action'] == 'up':
-					current_dir = entry['path']
-					selected_index = 0
-					scroll_offset = 0
-				elif entry['action'] == 'enter':
-					current_dir = entry['path']
-					selected_index = 0
-					scroll_offset = 0
-				else:
-					print(term.clear, end='', flush=True)
-					return entry['path']
-			elif str(key).lower() in ['q', '\x1b']:
-				print(term.clear, end='', flush=True)
-				return None
 
 
 class ConsoleLogger:
@@ -419,6 +288,162 @@ class ConsoleLogger:
 			f.write(log_entry)
 
 
+class UIHelpers:
+	"""Terminal UI helpers for color output, QR codes, and file selection."""
+
+	@staticmethod
+	def ensure_utf8(stream):
+		if stream.encoding != 'utf-8':
+			return io.TextIOWrapper(stream.buffer, encoding='utf-8', errors='replace')
+		return stream
+
+	@staticmethod
+	def should_use_color() -> bool:
+		return sys.stdout.isatty()
+
+	@staticmethod
+	def style(text: str, color: str) -> str:
+		if not UIHelpers.should_use_color():
+			return text
+		return f'{color}{text}{TerminalColors.RESET}'
+
+	@staticmethod
+	def heading(icon: str, title: str, color: str = TerminalColors.Foreground.CYAN) -> str:
+		return UIHelpers.style(f'{icon} {title}', color)
+
+	@staticmethod
+	def render_qr(data: str) -> str:
+		"""Render a string as a terminal-friendly QR code."""
+		if not QRCODE_AVAILABLE:
+			raise RuntimeError(
+				'QR code support is not available. Please install the qrcode package.'
+			)
+
+		qr = qrcode.QRCode(border=1)
+		qr.add_data(data)
+		qr.make(fit=True)
+		matrix = qr.get_matrix()
+		lines = []
+		for row_index in range(0, len(matrix), 2):
+			top_row = matrix[row_index]
+			bottom_row = (
+				matrix[row_index + 1] if row_index + 1 < len(matrix) else [False] * len(top_row)
+			)
+			line = []
+			for top_cell, bottom_cell in zip(top_row, bottom_row):
+				if top_cell and bottom_cell:
+					line.append('█')
+				elif top_cell:
+					line.append('▀')
+				elif bottom_cell:
+					line.append('▄')
+				else:
+					line.append(' ')
+			lines.append(''.join(line).rstrip())
+		return '\n'.join(lines)
+
+	@staticmethod
+	def show_qr(data: str) -> None:
+		"""Print a rendered QR code to stdout."""
+		ConsoleLogger.show('info', 'QR Code Output:', icon='🔳', log_file=False)
+		print(UIHelpers.render_qr(data))
+
+	@staticmethod
+	def file_selector(start_path: str = '.') -> Optional[str]:
+		"""Open a simple terminal file selector and return the chosen path."""
+		if not BLESSED_AVAILABLE:
+			raise RuntimeError(
+				'Interactive file selection is not available. Please install the blessed package.'
+			)
+		if not sys.stdin.isatty() or not sys.stdout.isatty():
+			raise RuntimeError('Interactive file selection requires an interactive terminal.')
+
+		term = Terminal()
+		current_dir = os.path.abspath(
+			start_path if os.path.isdir(start_path) else os.path.dirname(start_path) or '.'
+		)
+		selected_index = 0
+		scroll_offset = 0
+		entries = []
+
+		def build_entries(directory: str):
+			parent_dir = os.path.dirname(directory)
+			items = [
+				{
+					'label': f'📁 [.] Select current directory: {directory}',
+					'path': directory,
+					'action': 'select',
+				},
+				{'label': '⬆️  [..] Go to parent directory', 'path': parent_dir, 'action': 'up'},
+			]
+			for name in sorted(
+				os.listdir(directory),
+				key=lambda item: (not os.path.isdir(os.path.join(directory, item)), item.lower()),
+			):
+				full_path = os.path.join(directory, name)
+				if os.path.isdir(full_path):
+					items.append({'label': f'📁 {name}', 'path': full_path, 'action': 'enter'})
+				else:
+					items.append({'label': f'📄 {name}', 'path': full_path, 'action': 'select'})
+			return items
+
+		def render_screen():
+			nonlocal scroll_offset
+			height = max(term.height - 6, 5)
+			scroll_offset = min(scroll_offset, max(len(entries) - height, 0))
+			if selected_index < scroll_offset:
+				scroll_offset = selected_index
+			if selected_index >= scroll_offset + height:
+				scroll_offset = selected_index - height + 1
+
+			lines = [
+				term.clear,
+				term.bold_cyan('Crypt Tools Interactive File Selection'),
+				term.white(f'Current directory: {current_dir}'),
+				term.yellow(
+					'Use ↑/↓ to move, Enter to open/select, Backspace/← for parent, q to cancel.'
+				),
+				'',
+			]
+			visible_entries = entries[scroll_offset : scroll_offset + height]
+			for idx, entry in enumerate(visible_entries, start=scroll_offset):
+				prefix = '➜ ' if idx == selected_index else '  '
+				style_fn = term.black_on_cyan if idx == selected_index else (lambda text: text)
+				lines.append(style_fn(f'{prefix}{entry["label"]}'))
+			print('\n'.join(lines), end='', flush=True)
+
+		with term.fullscreen(), term.cbreak(), term.hidden_cursor():
+			while True:
+				entries = build_entries(current_dir)
+				selected_index = max(0, min(selected_index, len(entries) - 1))
+				render_screen()
+				key = term.inkey()
+				if key.name in ['KEY_UP'] and selected_index > 0:
+					selected_index -= 1
+				elif key.name in ['KEY_DOWN'] and selected_index < len(entries) - 1:
+					selected_index += 1
+				elif key.name in ['KEY_LEFT', 'KEY_BACKSPACE']:
+					current_dir = os.path.dirname(current_dir)
+					selected_index = 0
+					scroll_offset = 0
+				elif key.name == 'KEY_ENTER' or key == '\n' or key == '\r':
+					entry = entries[selected_index]
+					if entry['action'] == 'up':
+						current_dir = entry['path']
+						selected_index = 0
+						scroll_offset = 0
+					elif entry['action'] == 'enter':
+						current_dir = entry['path']
+						selected_index = 0
+						scroll_offset = 0
+					else:
+						print(term.clear, end='', flush=True)
+						return entry['path']
+				elif str(key).lower() in ['q', '\x1b']:
+					print(term.clear, end='', flush=True)
+					return None
+
+
 class Banner:
 	"""
 	Provides ASCII art banners for program display.
@@ -485,19 +510,191 @@ class Banner:
 		print(f'{cyan}Author: {Config.AUTHOR}{reset}\n')
 
 
-def _uint32_to_bytes(value: int) -> bytes:
-	return value.to_bytes(4, byteorder='big', signed=False)
+class HeaderParser:
+	"""CT02 and legacy header parsing, format detection, and hidden footer inspection."""
 
+	@staticmethod
+	def uint32_to_bytes(value: int) -> bytes:
+		return value.to_bytes(4, byteorder='big', signed=False)
 
-def _bytes_to_uint32(raw: bytes) -> int:
-	return int.from_bytes(raw, byteorder='big', signed=False)
+	@staticmethod
+	def bytes_to_uint32(raw: bytes) -> int:
+		return int.from_bytes(raw, byteorder='big', signed=False)
 
+	@staticmethod
+	def build_header(
+		*,
+		compress: bool = False,
+		is_text: bool = False,
+		use_keyfile: bool = False,
+		kdf_id: int = Config.KDF_PBKDF2,
+		iterations: int = Config.PBKDF2_ITERATIONS,
+	) -> bytes:
+		flags = 0
+		if compress:
+			flags |= Config.FLAG_COMPRESS
+		if is_text:
+			flags |= Config.FLAG_TEXT
+		if use_keyfile:
+			flags |= Config.FLAG_KEYFILE
 
-def _single_password_arg(password_value) -> str:
-	"""Normalize a CLI password argument to a single password string."""
-	if isinstance(password_value, list):
-		return password_value[0] if password_value else ''
-	return password_value or ''
+		kdf_params = HeaderParser.uint32_to_bytes(iterations)
+		return b''.join(
+			[
+				Config.MAGIC,
+				bytes([Config.FORMAT_VERSION]),
+				bytes([flags]),
+				bytes([kdf_id]),
+				b'\x00',
+				bytes([Config.SALT_SIZE]),
+				bytes([Config.NONCE_SIZE]),
+				bytes([Config.TAG_SIZE]),
+				bytes([len(kdf_params)]),
+				kdf_params,
+			]
+		)
+
+	@staticmethod
+	def parse_ct02(data: bytes) -> dict:
+		if len(data) < 12:
+			raise ValueError('CT02 header too short')
+		if data[:4] != Config.MAGIC:
+			raise ValueError('Invalid CT02 magic')
+
+		version = data[4]
+		flags = data[5]
+		kdf_id = data[6]
+		salt_len = data[8]
+		nonce_len = data[9]
+		tag_len = data[10]
+		kdf_param_len = data[11]
+		header_len = 12 + kdf_param_len
+
+		if len(data) < header_len:
+			raise ValueError('Incomplete CT02 header')
+
+		kdf_params = data[12:header_len]
+		iterations = (
+			HeaderParser.bytes_to_uint32(kdf_params)
+			if kdf_param_len == 4
+			else Config.PBKDF2_ITERATIONS
+		)
+
+		return {
+			'format': Config.MAGIC.decode('ascii'),
+			'version': version,
+			'flags': flags,
+			'compress': bool(flags & Config.FLAG_COMPRESS),
+			'is_text': bool(flags & Config.FLAG_TEXT),
+			'use_keyfile': bool(flags & Config.FLAG_KEYFILE),
+			'kdf_id': kdf_id,
+			'iterations': iterations,
+			'salt_len': salt_len,
+			'nonce_len': nonce_len,
+			'tag_len': tag_len,
+			'kdf_param_len': kdf_param_len,
+			'header_len': header_len,
+			'is_legacy': False,
+		}
+
+	@staticmethod
+	def parse_legacy(*, text_payload: bool = False) -> dict:
+		return {
+			'format': 'legacy-v2.1',
+			'version': 'legacy',
+			'flags': 0,
+			'compress': None,
+			'is_text': text_payload,
+			'use_keyfile': False,
+			'kdf_id': Config.KDF_PBKDF2,
+			'iterations': Config.PBKDF2_ITERATIONS,
+			'salt_len': Config.SALT_SIZE,
+			'nonce_len': Config.NONCE_SIZE,
+			'tag_len': Config.TAG_SIZE,
+			'kdf_param_len': 4,
+			'header_len': 0,
+			'is_legacy': True,
+		}
+
+	@staticmethod
+	def parse_format(data: bytes, *, text_payload: bool = False) -> dict:
+		if len(data) >= 4 and data[:4] == Config.MAGIC:
+			return HeaderParser.parse_ct02(data)
+		return HeaderParser.parse_legacy(text_payload=text_payload)
+
+	@staticmethod
+	def parse_hidden_footer(path: str) -> Optional[dict]:
+		"""
+		Parse hidden-volume container footer from the end of a file.
+		Layout: ... [CT02_outer][CT02_hidden][CTHV][uint64_be outer_total_len]
+		Returns dict with outerTotalLen, hiddenStart, hiddenLen, fileSize or None.
+		"""
+		try:
+			file_size = os.path.getsize(path)
+		except OSError:
+			return None
+
+		min_blob = Config.FIXED_HEADER_SIZE + Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
+		if file_size < min_blob * 2 + Config.CONTAINER_FOOTER_SIZE:
+			return None
+
+		with open(path, 'rb') as f:
+			f.seek(-Config.CONTAINER_FOOTER_SIZE, os.SEEK_END)
+			footer = f.read(Config.CONTAINER_FOOTER_SIZE)
+
+		if len(footer) != Config.CONTAINER_FOOTER_SIZE:
+			return None
+		if footer[:4] != Config.CONTAINER_FOOTER_MAGIC:
+			return None
+
+		outer_total_len = int.from_bytes(footer[4:12], byteorder='big', signed=False)
+		if outer_total_len <= 0 or outer_total_len >= file_size - Config.CONTAINER_FOOTER_SIZE:
+			return None
+
+		hidden_start = outer_total_len
+		hidden_len = file_size - Config.CONTAINER_FOOTER_SIZE - outer_total_len
+		if hidden_len < min_blob:
+			return None
+
+		with open(path, 'rb') as f:
+			f.seek(hidden_start)
+			magic_check = f.read(4)
+			if magic_check != Config.MAGIC:
+				return None
+
+		return {
+			'outerTotalLen': outer_total_len,
+			'hiddenStart': hidden_start,
+			'hiddenLen': hidden_len,
+			'fileSize': file_size,
+		}
+
+	@staticmethod
+	def inspect_threshold(path: str) -> Optional[dict]:
+		"""Return threshold metadata for a CT02 threshold-encrypted file, or None."""
+		if not os.path.isfile(path):
+			return None
+
+		with open(path, 'rb') as fin:
+			prefix = fin.read(Config.FIXED_HEADER_SIZE)
+
+		if len(prefix) < Config.FIXED_HEADER_SIZE or prefix[:4] != Config.MAGIC:
+			return None
+
+		metadata = HeaderParser.parse_format(prefix, text_payload=False)
+		if metadata['is_legacy'] or not (metadata['flags'] & Config.FLAG_THRESHOLD):
+			return None
+
+		share_counts_offset = metadata['header_len'] + metadata['salt_len'] + metadata['nonce_len']
+
+		with open(path, 'rb') as fin:
+			fin.seek(share_counts_offset)
+			num_and_thresh = fin.read(2)
+
+		if len(num_and_thresh) != 2:
+			raise ValueError('Threshold metadata is incomplete')
+
+		return {'num_passwords': num_and_thresh[0], 'threshold': num_and_thresh[1]}
 
 
 CONFIG_FILENAMES = (
@@ -564,333 +761,172 @@ CLI_OPTION_ALIASES = {
 }
 
 
-def _normalize_config_key(raw_key: str) -> Optional[str]:
-	return CONFIG_KEY_ALIASES.get(raw_key.strip().lower().replace('-', '_'))
+class ConfigParser:
+	"""Configuration file parsing and runtime defaults management."""
 
+	@staticmethod
+	def normalize_key(raw_key: str) -> Optional[str]:
+		return CONFIG_KEY_ALIASES.get(raw_key.strip().lower().replace('-', '_'))
 
-def _parse_bool(value):
-	if isinstance(value, bool):
+	@staticmethod
+	def parse_bool(value):
+		if isinstance(value, bool):
+			return value
+		if isinstance(value, int):
+			return bool(value)
+		normalized = str(value).strip().lower()
+		if normalized in {'1', 'true', 'yes', 'on'}:
+			return True
+		if normalized in {'0', 'false', 'no', 'off'}:
+			return False
+		raise ValueError(f'Invalid boolean value: {value}')
+
+	@staticmethod
+	def coerce_value(key: str, value):
+		if key in {'compress', 'log', 'debug'}:
+			return ConfigParser.parse_bool(value)
+		if key in {'iterations', 'threshold'}:
+			return int(value)
+		if key == 'kdf':
+			return str(value).strip().lower()
+		if key in {'password', 'password_outer', 'password_hidden', 'keyfile'}:
+			return str(value)
 		return value
-	if isinstance(value, int):
-		return bool(value)
-	normalized = str(value).strip().lower()
-	if normalized in {'1', 'true', 'yes', 'on'}:
-		return True
-	if normalized in {'0', 'false', 'no', 'off'}:
-		return False
-	raise ValueError(f'Invalid boolean value: {value}')
+
+	@staticmethod
+	def parse_yaml(content: str):
+		data = {}
+		for line in content.splitlines():
+			stripped = line.strip()
+			if not stripped or stripped.startswith('#'):
+				continue
+			if ':' not in stripped:
+				raise ValueError(f'Invalid YAML line: {line}')
+			key, raw_value = stripped.split(':', 1)
+			data[key.strip()] = raw_value.strip()
+		return data
+
+	@staticmethod
+	def parse_conf(content: str):
+		data = {}
+		for line in content.splitlines():
+			stripped = line.strip()
+			if not stripped or stripped.startswith('#') or stripped.startswith(';'):
+				continue
+			separator = '=' if '=' in stripped else ':'
+			if separator not in stripped:
+				raise ValueError(f'Invalid config line: {line}')
+			key, raw_value = stripped.split(separator, 1)
+			data[key.strip()] = raw_value.strip()
+		return data
+
+	@staticmethod
+	def read_file(config_path: str):
+		_, ext = os.path.splitext(config_path.lower())
+		with open(config_path, encoding='utf-8') as f:
+			content = f.read()
+
+		if ext == '.json':
+			parsed = json.loads(content)
+		elif ext in {'.yml', '.yaml'}:
+			parsed = ConfigParser.parse_yaml(content)
+		else:
+			parsed = ConfigParser.parse_conf(content)
+
+		if not isinstance(parsed, dict):
+			raise ValueError('Configuration file must contain a top-level object')
+
+		normalized = {}
+		for raw_key, raw_value in parsed.items():
+			key = ConfigParser.normalize_key(str(raw_key))
+			if not key:
+				continue
+			normalized[key] = ConfigParser.coerce_value(key, raw_value)
+		return normalized
+
+	@staticmethod
+	def discover_path(explicit_path: Optional[str] = None):
+		if explicit_path:
+			return explicit_path, True
+
+		for filename in CONFIG_FILENAMES:
+			candidate = os.path.join(os.getcwd(), filename)
+			if os.path.exists(candidate) and os.path.isfile(candidate):
+				return candidate, False
+		return None, False
+
+	@staticmethod
+	def load_defaults(explicit_config_path: Optional[str] = None):
+		config_path, explicit = ConfigParser.discover_path(explicit_config_path)
+		config_defaults = {}
+		if config_path:
+			try:
+				config_defaults = ConfigParser.read_file(config_path)
+			except Exception as e:
+				raise ValueError(f'Failed to load config file {config_path}: {e}') from e
+		elif explicit:
+			raise ValueError(f'Config file not found: {explicit_config_path}')
+
+		env_defaults = {}
+		for env_key, normalized_key in ENV_KEY_ALIASES.items():
+			raw_value = os.environ.get(env_key)
+			if raw_value in [None, '']:
+				continue
+			env_defaults[normalized_key] = ConfigParser.coerce_value(normalized_key, raw_value)
+
+		return config_path, config_defaults, env_defaults
+
+	@staticmethod
+	def detect_cli_overrides(argv=None):
+		tokens = sys.argv[1:] if argv is None else list(argv)
+		overrides = set()
+		for token in tokens:
+			if token.startswith('--'):
+				flag = token.split('=', 1)[0]
+				normalized = CLI_OPTION_ALIASES.get(flag)
+				if normalized:
+					overrides.add(normalized)
+			elif token in CLI_OPTION_ALIASES:
+				overrides.add(CLI_OPTION_ALIASES[token])
+		return overrides
+
+	@staticmethod
+	def apply_defaults(args, cli_overrides, config_defaults, env_defaults):
+		merged_defaults = dict(config_defaults)
+		merged_defaults.update(env_defaults)
+
+		if 'password' not in cli_overrides and not args.password and 'password' in merged_defaults:
+			password_value = merged_defaults['password']
+			args.password = password_value if isinstance(password_value, list) else [password_value]
+
+		for attr in ['password_outer', 'password_hidden', 'keyfile', 'threshold']:
+			if attr in cli_overrides:
+				continue
+			if getattr(args, attr) is None and attr in merged_defaults:
+				setattr(args, attr, merged_defaults[attr])
+
+		for attr in ['compress', 'log', 'debug']:
+			if attr in cli_overrides:
+				continue
+			if attr in merged_defaults:
+				setattr(args, attr, bool(merged_defaults[attr]))
+
+		if 'kdf' not in cli_overrides and args.kdf is None and 'kdf' in merged_defaults:
+			args.kdf = merged_defaults['kdf']
+
+		if (
+			'iterations' not in cli_overrides
+			and args.iterations is None
+			and 'iterations' in merged_defaults
+		):
+			args.iterations = merged_defaults['iterations']
+
+		return args
 
 
-def _coerce_config_value(key: str, value):
-	if key in {'compress', 'log', 'debug'}:
-		return _parse_bool(value)
-	if key in {'iterations', 'threshold'}:
-		return int(value)
-	if key == 'kdf':
-		return str(value).strip().lower()
-	if key in {'password', 'password_outer', 'password_hidden', 'keyfile'}:
-		return str(value)
-	return value
-
-
-def _parse_simple_yaml(content: str):
-	data = {}
-	for line in content.splitlines():
-		stripped = line.strip()
-		if not stripped or stripped.startswith('#'):
-			continue
-		if ':' not in stripped:
-			raise ValueError(f'Invalid YAML line: {line}')
-		key, raw_value = stripped.split(':', 1)
-		data[key.strip()] = raw_value.strip()
-	return data
-
-
-def _parse_simple_conf(content: str):
-	data = {}
-	for line in content.splitlines():
-		stripped = line.strip()
-		if not stripped or stripped.startswith('#') or stripped.startswith(';'):
-			continue
-		separator = '=' if '=' in stripped else ':'
-		if separator not in stripped:
-			raise ValueError(f'Invalid config line: {line}')
-		key, raw_value = stripped.split(separator, 1)
-		data[key.strip()] = raw_value.strip()
-	return data
-
-
-def _read_config_file(config_path: str):
-	_, ext = os.path.splitext(config_path.lower())
-	with open(config_path, encoding='utf-8') as f:
-		content = f.read()
-
-	if ext == '.json':
-		parsed = json.loads(content)
-	elif ext in {'.yml', '.yaml'}:
-		parsed = _parse_simple_yaml(content)
-	else:
-		parsed = _parse_simple_conf(content)
-
-	if not isinstance(parsed, dict):
-		raise ValueError('Configuration file must contain a top-level object')
-
-	normalized = {}
-	for raw_key, raw_value in parsed.items():
-		key = _normalize_config_key(str(raw_key))
-		if not key:
-			continue
-		normalized[key] = _coerce_config_value(key, raw_value)
-	return normalized
-
-
-def _discover_config_path(explicit_path: Optional[str] = None):
-	if explicit_path:
-		return explicit_path, True
-
-	for filename in CONFIG_FILENAMES:
-		candidate = os.path.join(os.getcwd(), filename)
-		if os.path.exists(candidate) and os.path.isfile(candidate):
-			return candidate, False
-	return None, False
-
-
-def _load_runtime_defaults(explicit_config_path: Optional[str] = None):
-	config_path, explicit = _discover_config_path(explicit_config_path)
-	config_defaults = {}
-	if config_path:
-		try:
-			config_defaults = _read_config_file(config_path)
-		except Exception as e:
-			raise ValueError(f'Failed to load config file {config_path}: {e}') from e
-	elif explicit:
-		raise ValueError(f'Config file not found: {explicit_config_path}')
-
-	env_defaults = {}
-	for env_key, normalized_key in ENV_KEY_ALIASES.items():
-		raw_value = os.environ.get(env_key)
-		if raw_value in [None, '']:
-			continue
-		env_defaults[normalized_key] = _coerce_config_value(normalized_key, raw_value)
-
-	return config_path, config_defaults, env_defaults
-
-
-def _detect_cli_overrides(argv=None):
-	tokens = sys.argv[1:] if argv is None else list(argv)
-	overrides = set()
-	for token in tokens:
-		if token.startswith('--'):
-			flag = token.split('=', 1)[0]
-			normalized = CLI_OPTION_ALIASES.get(flag)
-			if normalized:
-				overrides.add(normalized)
-		elif token in CLI_OPTION_ALIASES:
-			overrides.add(CLI_OPTION_ALIASES[token])
-	return overrides
-
-
-def _apply_runtime_defaults(args, cli_overrides, config_defaults, env_defaults):
-	merged_defaults = dict(config_defaults)
-	merged_defaults.update(env_defaults)
-
-	if 'password' not in cli_overrides and not args.password and 'password' in merged_defaults:
-		password_value = merged_defaults['password']
-		args.password = password_value if isinstance(password_value, list) else [password_value]
-
-	for attr in ['password_outer', 'password_hidden', 'keyfile', 'threshold']:
-		if attr in cli_overrides:
-			continue
-		if getattr(args, attr) is None and attr in merged_defaults:
-			setattr(args, attr, merged_defaults[attr])
-
-	for attr in ['compress', 'log', 'debug']:
-		if attr in cli_overrides:
-			continue
-		if attr in merged_defaults:
-			setattr(args, attr, bool(merged_defaults[attr]))
-
-	if 'kdf' not in cli_overrides and args.kdf is None and 'kdf' in merged_defaults:
-		args.kdf = merged_defaults['kdf']
-
-	if 'iterations' not in cli_overrides and args.iterations is None and 'iterations' in merged_defaults:
-		args.iterations = merged_defaults['iterations']
-
-	return args
-
-
-def _build_header(
-	*,
-	compress: bool = False,
-	is_text: bool = False,
-	use_keyfile: bool = False,
-	kdf_id: int = Config.KDF_PBKDF2,
-	iterations: int = Config.PBKDF2_ITERATIONS,
-) -> bytes:
-	flags = 0
-	if compress:
-		flags |= Config.FLAG_COMPRESS
-	if is_text:
-		flags |= Config.FLAG_TEXT
-	if use_keyfile:
-		flags |= Config.FLAG_KEYFILE
-
-	kdf_params = _uint32_to_bytes(iterations)
-	return b''.join(
-		[
-			Config.MAGIC,
-			bytes([Config.FORMAT_VERSION]),
-			bytes([flags]),
-			bytes([kdf_id]),
-			b'\x00',
-			bytes([Config.SALT_SIZE]),
-			bytes([Config.NONCE_SIZE]),
-			bytes([Config.TAG_SIZE]),
-			bytes([len(kdf_params)]),
-			kdf_params,
-		]
-	)
-
-
-def _parse_ct02_header_from_bytes(data: bytes) -> dict:
-	if len(data) < 12:
-		raise ValueError('CT02 header too short')
-	if data[:4] != Config.MAGIC:
-		raise ValueError('Invalid CT02 magic')
-
-	version = data[4]
-	flags = data[5]
-	kdf_id = data[6]
-	salt_len = data[8]
-	nonce_len = data[9]
-	tag_len = data[10]
-	kdf_param_len = data[11]
-	header_len = 12 + kdf_param_len
-
-	if len(data) < header_len:
-		raise ValueError('Incomplete CT02 header')
-
-	kdf_params = data[12:header_len]
-	iterations = _bytes_to_uint32(kdf_params) if kdf_param_len == 4 else Config.PBKDF2_ITERATIONS
-
-	return {
-		'format': Config.MAGIC.decode('ascii'),
-		'version': version,
-		'flags': flags,
-		'compress': bool(flags & Config.FLAG_COMPRESS),
-		'is_text': bool(flags & Config.FLAG_TEXT),
-		'use_keyfile': bool(flags & Config.FLAG_KEYFILE),
-		'kdf_id': kdf_id,
-		'iterations': iterations,
-		'salt_len': salt_len,
-		'nonce_len': nonce_len,
-		'tag_len': tag_len,
-		'kdf_param_len': kdf_param_len,
-		'header_len': header_len,
-		'is_legacy': False,
-	}
-
-
-def _parse_legacy_header(*, text_payload: bool = False) -> dict:
-	return {
-		'format': 'legacy-v2.1',
-		'version': 'legacy',
-		'flags': 0,
-		'compress': None,
-		'is_text': text_payload,
-		'use_keyfile': False,
-		'kdf_id': Config.KDF_PBKDF2,
-		'iterations': Config.PBKDF2_ITERATIONS,
-		'salt_len': Config.SALT_SIZE,
-		'nonce_len': Config.NONCE_SIZE,
-		'tag_len': Config.TAG_SIZE,
-		'kdf_param_len': 4,
-		'header_len': 0,
-		'is_legacy': True,
-	}
-
-
-def _parse_format_from_bytes(data: bytes, *, text_payload: bool = False) -> dict:
-	if len(data) >= 4 and data[:4] == Config.MAGIC:
-		return _parse_ct02_header_from_bytes(data)
-	return _parse_legacy_header(text_payload=text_payload)
-
-
-def parse_hidden_container_footer_from_path(path: str) -> Optional[dict]:
-	"""
-	Parse hidden-volume container footer from the end of a file.
-	Layout: ... [CT02_outer][CT02_hidden][CTHV][uint64_be outer_total_len]
-	Returns dict with outerTotalLen, hiddenStart, hiddenLen, fileSize or None.
-	"""
-	try:
-		file_size = os.path.getsize(path)
-	except OSError:
-		return None
-
-	min_blob = Config.FIXED_HEADER_SIZE + Config.SALT_SIZE + Config.NONCE_SIZE + Config.TAG_SIZE
-	if file_size < min_blob * 2 + Config.CONTAINER_FOOTER_SIZE:
-		return None
-
-	with open(path, 'rb') as f:
-		f.seek(-Config.CONTAINER_FOOTER_SIZE, os.SEEK_END)
-		footer = f.read(Config.CONTAINER_FOOTER_SIZE)
-
-	if len(footer) != Config.CONTAINER_FOOTER_SIZE:
-		return None
-	if footer[:4] != Config.CONTAINER_FOOTER_MAGIC:
-		return None
-
-	outer_total_len = int.from_bytes(footer[4:12], byteorder='big', signed=False)
-	if outer_total_len <= 0 or outer_total_len >= file_size - Config.CONTAINER_FOOTER_SIZE:
-		return None
-
-	hidden_start = outer_total_len
-	hidden_len = file_size - Config.CONTAINER_FOOTER_SIZE - outer_total_len
-	if hidden_len < min_blob:
-		return None
-
-	with open(path, 'rb') as f:
-		f.seek(hidden_start)
-		magic_check = f.read(4)
-		if magic_check != Config.MAGIC:
-			return None
-
-	return {
-		'outerTotalLen': outer_total_len,
-		'hiddenStart': hidden_start,
-		'hiddenLen': hidden_len,
-		'fileSize': file_size,
-	}
-
-
-def inspect_threshold_requirements_from_path(path: str) -> Optional[dict]:
-	"""Return threshold metadata for a CT02 threshold-encrypted file, or None."""
-	if not os.path.isfile(path):
-		return None
-
-	with open(path, 'rb') as fin:
-		prefix = fin.read(Config.FIXED_HEADER_SIZE)
-
-	if len(prefix) < Config.FIXED_HEADER_SIZE or prefix[:4] != Config.MAGIC:
-		return None
-
-	metadata = _parse_format_from_bytes(prefix, text_payload=False)
-	if metadata['is_legacy'] or not (metadata['flags'] & Config.FLAG_THRESHOLD):
-		return None
-
-	share_counts_offset = metadata['header_len'] + metadata['salt_len'] + metadata['nonce_len']
-
-	with open(path, 'rb') as fin:
-		fin.seek(share_counts_offset)
-		num_and_thresh = fin.read(2)
-
-	if len(num_and_thresh) != 2:
-		raise ValueError('Threshold metadata is incomplete')
-
-	return {'num_passwords': num_and_thresh[0], 'threshold': num_and_thresh[1]}
-
-
-def _inspect_ct02_blob_from_path(input_path: str, *, blob_start: int = 0, blob_span: Optional[int] = None) -> dict:
+def _inspect_ct02_blob_from_path(
+	input_path: str, *, blob_start: int = 0, blob_span: Optional[int] = None
+) -> dict:
 	"""Inspect a single CT02 blob at a given offset."""
 	file_size = os.path.getsize(input_path)
 	span = file_size - blob_start if blob_span is None else blob_span
@@ -904,14 +940,16 @@ def _inspect_ct02_blob_from_path(input_path: str, *, blob_start: int = 0, blob_s
 	if len(prefix) < Config.FIXED_HEADER_SIZE:
 		raise ValueError('File is too small to inspect')
 	if prefix[:4] != Config.MAGIC:
-		raise ValueError('Unrecognized file format. Only CT02 encrypted files can be inspected reliably.')
+		raise ValueError(
+			'Unrecognized file format. Only CT02 encrypted files can be inspected reliably.'
+		)
 
-	metadata = _parse_format_from_bytes(prefix, text_payload=False)
+	metadata = HeaderParser.parse_format(prefix, text_payload=False)
 	if not metadata['is_legacy'] and len(prefix) < metadata['header_len']:
 		with open(input_path, 'rb') as fin:
 			fin.seek(blob_start)
 			prefix = fin.read(metadata['header_len'])
-		metadata = _parse_ct02_header_from_bytes(prefix)
+		metadata = HeaderParser.parse_ct02(prefix)
 
 	header_len = metadata['header_len']
 	salt_len = metadata['salt_len']
@@ -970,65 +1008,69 @@ def _inspect_ct02_blob_from_path(input_path: str, *, blob_start: int = 0, blob_s
 # =========================
 
 
-def generate_keyfile(output_path: str, key_size: int = 16) -> bool:
-	"""Generate a MEGA-style textual recovery key securely."""
-	try:
-		key = os.urandom(key_size)
-		recovery_key = base64.urlsafe_b64encode(key).decode('ascii').rstrip('=')
-		with open(output_path, 'w', encoding='utf-8', newline='\n') as f:
-			f.write(f'{recovery_key}\n')
-		ConsoleLogger.show('success', f'Recovery key file generated: {output_path}')
-		ConsoleLogger.show('info', f'Key size: {key_size} bytes ({key_size * 8} bits)')
-		return True
-	except Exception as e:
-		ConsoleLogger.show('error', f'Failed to generate key file: {e}')
-		return False
+class KeyFileUtils:
+	"""Key file generation, reading, and password combination."""
 
-
-def read_keyfile(keyfile_path: str) -> Optional[bytes]:
-	"""Read and validate a key file or textual recovery key."""
-	try:
-		if not os.path.exists(keyfile_path):
-			raise FileNotFoundError(f'Key file not found: {keyfile_path}')
-
-		with open(keyfile_path, 'rb') as f:
-			raw_data = f.read()
-
-		if len(raw_data) > 4096:
-			raise ValueError(f'Key file too large: {len(raw_data)} bytes (maximum 4096)')
-
-		key_data = raw_data
+	@staticmethod
+	def generate(path: str, key_size: int = 16) -> bool:
+		"""Generate a MEGA-style textual recovery key securely."""
 		try:
-			text_data = raw_data.decode('utf-8').strip()
-			if text_data:
-				if not re.fullmatch(r'[A-Za-z0-9_-]+', text_data):
-					raise ValueError('Recovery key contains invalid characters')
-				padding = '=' * ((4 - len(text_data) % 4) % 4)
-				key_data = base64.b64decode(text_data + padding, altchars=b'-_', validate=True)
-		except UnicodeDecodeError:
+			key = os.urandom(key_size)
+			recovery_key = base64.urlsafe_b64encode(key).decode('ascii').rstrip('=')
+			with open(path, 'w', encoding='utf-8', newline='\n') as f:
+				f.write(f'{recovery_key}\n')
+			ConsoleLogger.show('success', f'Recovery key file generated: {path}')
+			ConsoleLogger.show('info', f'Key size: {key_size} bytes ({key_size * 8} bits)')
+			return True
+		except Exception as e:
+			ConsoleLogger.show('error', f'Failed to generate key file: {e}')
+			return False
+
+	@staticmethod
+	def read(path: str) -> Optional[bytes]:
+		"""Read and validate a key file or textual recovery key."""
+		try:
+			if not os.path.exists(path):
+				raise FileNotFoundError(f'Key file not found: {path}')
+
+			with open(path, 'rb') as f:
+				raw_data = f.read()
+
+			if len(raw_data) > 4096:
+				raise ValueError(f'Key file too large: {len(raw_data)} bytes (maximum 4096)')
+
 			key_data = raw_data
-		except binascii.Error as e:
-			raise ValueError(f'Invalid recovery key format: {e}') from e
+			try:
+				text_data = raw_data.decode('utf-8').strip()
+				if text_data:
+					if not re.fullmatch(r'[A-Za-z0-9_-]+', text_data):
+						raise ValueError('Recovery key contains invalid characters')
+					padding = '=' * ((4 - len(text_data) % 4) % 4)
+					key_data = base64.b64decode(text_data + padding, altchars=b'-_', validate=True)
+			except UnicodeDecodeError:
+				key_data = raw_data
+			except binascii.Error as e:
+				raise ValueError(f'Invalid recovery key format: {e}') from e
 
-		if len(key_data) < 16:
-			raise ValueError(f'Key file too small: {len(key_data)} bytes (minimum 16)')
+			if len(key_data) < 16:
+				raise ValueError(f'Key file too small: {len(key_data)} bytes (minimum 16)')
 
-		if len(key_data) > 1024:
-			raise ValueError(f'Key file too large: {len(key_data)} bytes (maximum 1024)')
+			if len(key_data) > 1024:
+				raise ValueError(f'Key file too large: {len(key_data)} bytes (maximum 1024)')
 
-		ConsoleLogger.show('debug', f'Read key file: {keyfile_path} ({len(key_data)} bytes)')
-		return key_data
+			ConsoleLogger.show('debug', f'Read key file: {path} ({len(key_data)} bytes)')
+			return key_data
 
-	except Exception as e:
-		ConsoleLogger.show('error', f'Failed to read key file: {e}')
-		return None
+		except Exception as e:
+			ConsoleLogger.show('error', f'Failed to read key file: {e}')
+			return None
 
-
-def combine_password_and_keyfile(password: str, keyfile_data: bytes) -> str:
-	"""Combine password and keyfile data for two-factor encryption."""
-	combined = password.encode('utf-8') + keyfile_data
-	hashed = hashlib.sha256(combined).digest()
-	return hashed.hex()
+	@staticmethod
+	def combine_password_and_keyfile(password: str, keyfile_data: bytes) -> str:
+		"""Combine password and keyfile data for two-factor encryption."""
+		combined = password.encode('utf-8') + keyfile_data
+		hashed = hashlib.sha256(combined).digest()
+		return hashed.hex()
 
 
 # =========================
@@ -1062,7 +1104,7 @@ class CryptoEngine:
 
 			if keyfile_data:
 				ConsoleLogger.show('debug', 'Using key file for key derivation')
-				derived_from = combine_password_and_keyfile(password, keyfile_data)
+				derived_from = KeyFileUtils.combine_password_and_keyfile(password, keyfile_data)
 			else:
 				derived_from = password
 
@@ -1081,7 +1123,7 @@ class CryptoEngine:
 
 		if keyfile_data:
 			ConsoleLogger.show('debug', 'Using key file for key derivation')
-			derived_from = combine_password_and_keyfile(password, keyfile_data)
+			derived_from = KeyFileUtils.combine_password_and_keyfile(password, keyfile_data)
 		else:
 			derived_from = password
 
@@ -1117,7 +1159,7 @@ class CryptoEngine:
 		salt = os.urandom(Config.SALT_SIZE)
 		nonce = os.urandom(Config.NONCE_SIZE)
 		use_keyfile = keyfile_data is not None
-		header = _build_header(
+		header = HeaderParser.build_header(
 			is_text=True, use_keyfile=use_keyfile, kdf_id=kdf_type, iterations=iterations
 		)
 		ConsoleLogger.show(
@@ -1150,7 +1192,7 @@ class CryptoEngine:
 				'debug',
 				f'Starting in-memory data decryption. Total input size: {len(enc_data)} bytes',
 			)
-			metadata = _parse_format_from_bytes(enc_data, text_payload=True)
+			metadata = HeaderParser.parse_format(enc_data, text_payload=True)
 			overhead = (
 				metadata['header_len']
 				+ metadata['salt_len']
@@ -1237,7 +1279,7 @@ class CryptoEngine:
 			key = self._derive_key(password, salt, keyfile_data, kdf_type, iterations)
 			ConsoleLogger.show('debug', 'Initializing AES-GCM cipher')
 			cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
-			header = _build_header(
+			header = HeaderParser.build_header(
 				compress=compress,
 				is_text=False,
 				use_keyfile=use_keyfile,
@@ -1335,7 +1377,7 @@ class CryptoEngine:
 			with open(input_path, 'rb') as fin:
 				fin.seek(slice_start)
 				prefix = fin.read(Config.FIXED_HEADER_SIZE)
-				metadata = _parse_format_from_bytes(prefix, text_payload=False)
+				metadata = HeaderParser.parse_format(prefix, text_payload=False)
 				if metadata['is_legacy']:
 					if slice_start != 0:
 						raise ValueError('Legacy format does not support container slices')
@@ -1344,7 +1386,7 @@ class CryptoEngine:
 				else:
 					if len(prefix) < metadata['header_len']:
 						prefix += fin.read(metadata['header_len'] - len(prefix))
-					metadata = _parse_ct02_header_from_bytes(prefix)
+					metadata = HeaderParser.parse_ct02(prefix)
 					effective_compress = metadata['compress']
 
 				use_keyfile = metadata.get('use_keyfile', False)
@@ -1459,7 +1501,7 @@ class CryptoEngine:
 		"""Create [CT02_outer][CT02_hidden][CTHV][uint64 outer_len]."""
 		tmp_outer = None
 		tmp_hidden = None
-		try:	
+		try:
 			fd_o, tmp_outer = tempfile.mkstemp(prefix='ct_outer_', suffix='.enc')
 			os.close(fd_o)
 			fd_h, tmp_hidden = tempfile.mkstemp(prefix='ct_hidden_', suffix='.enc')
@@ -1537,7 +1579,7 @@ class CryptoEngine:
 		compress: bool = False,
 		keyfile_data: Optional[bytes] = None,
 	) -> bool:
-		info = parse_hidden_container_footer_from_path(input_path)
+		info = HeaderParser.parse_hidden_footer(input_path)
 		if not info:
 			ConsoleLogger.show(
 				'error',
@@ -1575,7 +1617,7 @@ class CryptoEngine:
 			raise FileNotFoundError(f"ENOENT: no such file or directory, stat '{input_path}'")
 
 		file_size = os.path.getsize(input_path)
-		footer_info = parse_hidden_container_footer_from_path(input_path)
+		footer_info = HeaderParser.parse_hidden_footer(input_path)
 		outer_span = footer_info['outerTotalLen'] if footer_info else file_size
 		result = _inspect_ct02_blob_from_path(input_path, blob_start=0, blob_span=outer_span)
 		result['fileSize'] = file_size
@@ -1634,7 +1676,7 @@ class CryptoEngine:
 			nonce = os.urandom(Config.NONCE_SIZE)
 			key = self._derive_key('threshold-dummy', salt, None, kdf_type, iterations)
 
-			header = _build_header(
+			header = HeaderParser.build_header(
 				compress=compress,
 				use_keyfile=keyfile_data is not None,
 				kdf_id=kdf_type,
@@ -1735,7 +1777,7 @@ class CryptoEngine:
 				fin.seek(slice_start)
 				prefix = fin.read(Config.FIXED_HEADER_SIZE)
 
-				metadata = _parse_format_from_bytes(prefix, text_payload=False)
+				metadata = HeaderParser.parse_format(prefix, text_payload=False)
 				if not (metadata['flags'] & Config.FLAG_THRESHOLD):
 					raise ValueError('File is not encrypted with threshold mode')
 
@@ -2054,95 +2096,44 @@ class PasswordStrength:
 		return ' '.join(types)
 
 
-def getpass_with_strength(prompt: str = 'Enter Password: ') -> str:
-	"""Get password with real-time strength indicator."""
-	import sys
+class PasswordUtils:
+	"""Password input, verification, and normalization utilities."""
 
-	# Fallback for non-interactive stdin (e.g., tests/CI).
-	if not sys.stdin.isatty():
-		return getpass.getpass(prompt)
+	@staticmethod
+	def normalize(password_value) -> str:
+		"""Normalize a CLI password argument to a single password string."""
+		if isinstance(password_value, list):
+			return password_value[0] if password_value else ''
+		return password_value or ''
 
-	# Write prompt
-	white = TerminalColors.Foreground.WHITE
-	reset = TerminalColors.RESET
-	sys.stdout.write(f'{white}[{reset}🔑{white}]{reset} {prompt}')
-	sys.stdout.flush()
+	@staticmethod
+	def prompt_with_strength(prompt: str = 'Enter Password: ') -> str:
+		"""Get password with real-time strength indicator."""
+		# Fallback for non-interactive stdin (e.g., tests/CI).
+		if not sys.stdin.isatty():
+			return getpass.getpass(prompt)
 
-	# Hide cursor
-	sys.stdout.write('\033[?25l')
-	sys.stdout.flush()
+		# Write prompt
+		white = TerminalColors.Foreground.WHITE
+		reset = TerminalColors.RESET
+		sys.stdout.write(f'{white}[{reset}🔑{white}]{reset} {prompt}')
+		sys.stdout.flush()
 
-	password = ''
+		# Hide cursor
+		sys.stdout.write('\033[?25l')
+		sys.stdout.flush()
 
-	# Check if running on Windows
-	if sys.platform == 'win32':
-		import msvcrt
+		password = ''
 
-		while True:
-			char = msvcrt.getch().decode('utf-8', errors='ignore')
-
-			if char == '\r' or char == '\n':
-				# Enter pressed - show cursor and newline
-				sys.stdout.write('\033[?25h\n')
-				sys.stdout.flush()
-				break
-			elif char == '\x03':
-				# Ctrl+C - show cursor
-				sys.stdout.write('\033[?25h\n')
-				sys.stdout.flush()
-				sys.exit(0)
-			elif char == '\x00' or char == '\xe0':
-				# Special key prefix, read next char
-				char2 = msvcrt.getch().decode('utf-8', errors='ignore')
-				if char2 == 'H':  # Up arrow
-					pass
-				elif char2 == 'P':  # Down arrow
-					pass
-				elif char2 == 'K':  # Left arrow
-					pass
-				elif char2 == 'M':  # Right arrow
-					pass
-				elif char2 == '\x53':  # Delete
-					pass
-			elif char == '\b' or char == '\x08':
-				# Backspace
-				if password:
-					password = password[:-1]
-					# Clear line and rewrite
-					strength_indicator = PasswordStrength.get_indicator(password)
-					char_types = PasswordStrength.get_char_types(password)
-					asterisks = '*' * len(password)
-					sys.stdout.write(
-						f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K'
-					)
-					sys.stdout.flush()
-			elif char >= ' ' and len(char) == 1:
-				# Regular character
-				password += char
-				# Update display with strength indicator
-				strength_indicator = PasswordStrength.get_indicator(password)
-				char_types = PasswordStrength.get_char_types(password)
-				asterisks = '*' * len(password)
-				sys.stdout.write(
-					f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K'
-				)
-				sys.stdout.flush()
-	else:
-		# Unix/Linux/Mac - use termios
-		import tty
-		import termios
-
-		fd = sys.stdin.fileno()
-		old_settings = termios.tcgetattr(fd)
-
-		try:
-			tty.setraw(fd)
+		# Check if running on Windows
+		if sys.platform == 'win32':
+			import msvcrt
 
 			while True:
-				char = sys.stdin.read(1)
+				char = msvcrt.getch().decode('utf-8', errors='ignore')
 
 				if char == '\r' or char == '\n':
-					# Enter pressed - show cursor
+					# Enter pressed - show cursor and newline
 					sys.stdout.write('\033[?25h\n')
 					sys.stdout.flush()
 					break
@@ -2150,14 +2141,21 @@ def getpass_with_strength(prompt: str = 'Enter Password: ') -> str:
 					# Ctrl+C - show cursor
 					sys.stdout.write('\033[?25h\n')
 					sys.stdout.flush()
-					termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 					sys.exit(0)
-				elif char == '\x04':
-					# Ctrl+D - show cursor
-					sys.stdout.write('\033[?25h\n')
-					sys.stdout.flush()
-					break
-				elif char == '\x7f' or char == '\b':
+				elif char == '\x00' or char == '\xe0':
+					# Special key prefix, read next char
+					char2 = msvcrt.getch().decode('utf-8', errors='ignore')
+					if char2 == 'H':  # Up arrow
+						pass
+					elif char2 == 'P':  # Down arrow
+						pass
+					elif char2 == 'K':  # Left arrow
+						pass
+					elif char2 == 'M':  # Right arrow
+						pass
+					elif char2 == '\x53':  # Delete
+						pass
+				elif char == '\b' or char == '\x08':
 					# Backspace
 					if password:
 						password = password[:-1]
@@ -2180,108 +2178,108 @@ def getpass_with_strength(prompt: str = 'Enter Password: ') -> str:
 						f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K'
 					)
 					sys.stdout.flush()
-		finally:
-			termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+		else:
+			# Unix/Linux/Mac - use termios
+			import tty
+			import termios
 
-	return password
+			fd = sys.stdin.fileno()
+			old_settings = termios.tcgetattr(fd)
 
+			try:
+				tty.setraw(fd)
 
-def getpass_verify_with_strength(
-	prompt1: str = 'Enter Password: ', prompt2: str = 'Verify Password: '
-) -> str:
-	"""Get password with verification and strength indicator."""
-	# Fallback for non-interactive stdin (e.g., tests/CI).
-	if not sys.stdin.isatty():
-		password = getpass.getpass(prompt1)
+				while True:
+					char = sys.stdin.read(1)
+
+					if char == '\r' or char == '\n':
+						# Enter pressed - show cursor
+						sys.stdout.write('\033[?25h\n')
+						sys.stdout.flush()
+						break
+					elif char == '\x03':
+						# Ctrl+C - show cursor
+						sys.stdout.write('\033[?25h\n')
+						sys.stdout.flush()
+						termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+						sys.exit(0)
+					elif char == '\x04':
+						# Ctrl+D - show cursor
+						sys.stdout.write('\033[?25h\n')
+						sys.stdout.flush()
+						break
+					elif char == '\x7f' or char == '\b':
+						# Backspace
+						if password:
+							password = password[:-1]
+							# Clear line and rewrite
+							strength_indicator = PasswordStrength.get_indicator(password)
+							char_types = PasswordStrength.get_char_types(password)
+							asterisks = '*' * len(password)
+							sys.stdout.write(
+								f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K'
+							)
+							sys.stdout.flush()
+					elif char >= ' ' and len(char) == 1:
+						# Regular character
+						password += char
+						# Update display with strength indicator
+						strength_indicator = PasswordStrength.get_indicator(password)
+						char_types = PasswordStrength.get_char_types(password)
+						asterisks = '*' * len(password)
+						sys.stdout.write(
+							f'\r{white}[{reset}🔑{white}]{reset} {prompt}{asterisks}  {strength_indicator}  {char_types}\033[K'
+						)
+						sys.stdout.flush()
+			finally:
+				termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+		return password
+
+	@staticmethod
+	def verify_with_strength(
+		prompt1: str = 'Enter Password: ', prompt2: str = 'Verify Password: '
+	) -> str:
+		"""Get password with verification and strength indicator."""
+		# Fallback for non-interactive stdin (e.g., tests/CI).
+		if not sys.stdin.isatty():
+			password = getpass.getpass(prompt1)
+			if not password:
+				ConsoleLogger.show('error', 'Password cannot be empty.')
+				ConsoleLogger.show('error', 'Operation aborted: No password provided')
+				sys.exit(1)
+			password2 = getpass.getpass(prompt2)
+			if password != password2:
+				ConsoleLogger.show('error', 'Passwords do not match!')
+				ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
+				sys.exit(1)
+			return password
+
+		password = PasswordUtils.prompt_with_strength(prompt1)
 		if not password:
 			ConsoleLogger.show('error', 'Password cannot be empty.')
 			ConsoleLogger.show('error', 'Operation aborted: No password provided')
 			sys.exit(1)
-		password2 = getpass.getpass(prompt2)
-		if password != password2:
-			ConsoleLogger.show('error', 'Passwords do not match!')
-			ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
-			sys.exit(1)
-		return password
 
-	password = getpass_with_strength(prompt1)
-	if not password:
-		ConsoleLogger.show('error', 'Password cannot be empty.')
-		ConsoleLogger.show('error', 'Operation aborted: No password provided')
-		sys.exit(1)
+		ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
 
-	ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
+		white = TerminalColors.Foreground.WHITE
+		reset = TerminalColors.RESET
+		sys.stdout.write(f'{white}[{reset}🔄{white}]{reset} {prompt2}')
+		sys.stdout.flush()
 
-	white = TerminalColors.Foreground.WHITE
-	reset = TerminalColors.RESET
-	sys.stdout.write(f'{white}[{reset}🔄{white}]{reset} {prompt2}')
-	sys.stdout.flush()
+		# Hide cursor
+		sys.stdout.write('\033[?25l')
+		sys.stdout.flush()
 
-	# Hide cursor
-	sys.stdout.write('\033[?25l')
-	sys.stdout.flush()
+		password2 = ''
 
-	password2 = ''
-
-	# Check if running on Windows
-	if sys.platform == 'win32':
-		import msvcrt
-
-		while True:
-			char = msvcrt.getch().decode('utf-8', errors='ignore')
-
-			if char == '\r' or char == '\n':
-				sys.stdout.write('\033[?25h\n')
-				sys.stdout.flush()
-				break
-			elif char == '\x03':
-				sys.stdout.write('\033[?25h\n')
-				sys.stdout.flush()
-				sys.exit(0)
-			elif char == '\x00' or char == '\xe0':
-				char2 = msvcrt.getch().decode('utf-8', errors='ignore')
-				if char2 == 'H':  # Up arrow
-					pass
-				elif char2 == 'P':  # Down arrow
-					pass
-				elif char2 == 'K':  # Left arrow
-					pass
-				elif char2 == 'M':  # Right arrow
-					pass
-				elif char2 == '\x53':  # Delete
-					pass
-			elif char == '\b' or char == '\x08':
-				if password2:
-					password2 = password2[:-1]
-					strength_indicator = PasswordStrength.get_indicator(password2)
-					char_types = PasswordStrength.get_char_types(password2)
-					asterisks = '*' * len(password2)
-					sys.stdout.write(
-						f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K'
-					)
-					sys.stdout.flush()
-			elif char >= ' ' and len(char) == 1:
-				password2 += char
-				strength_indicator = PasswordStrength.get_indicator(password2)
-				char_types = PasswordStrength.get_char_types(password2)
-				asterisks = '*' * len(password2)
-				sys.stdout.write(
-					f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K'
-				)
-				sys.stdout.flush()
-	else:
-		# Unix/Linux/Mac - use termios
-		import tty
-		import termios
-
-		fd = sys.stdin.fileno()
-		old_settings = termios.tcgetattr(fd)
-
-		try:
-			tty.setraw(fd)
+		# Check if running on Windows
+		if sys.platform == 'win32':
+			import msvcrt
 
 			while True:
-				char = sys.stdin.read(1)
+				char = msvcrt.getch().decode('utf-8', errors='ignore')
 
 				if char == '\r' or char == '\n':
 					sys.stdout.write('\033[?25h\n')
@@ -2290,13 +2288,20 @@ def getpass_verify_with_strength(
 				elif char == '\x03':
 					sys.stdout.write('\033[?25h\n')
 					sys.stdout.flush()
-					termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
 					sys.exit(0)
-				elif char == '\x04':
-					sys.stdout.write('\033[?25h\n')
-					sys.stdout.flush()
-					break
-				elif char == '\x7f' or char == '\b':
+				elif char == '\x00' or char == '\xe0':
+					char2 = msvcrt.getch().decode('utf-8', errors='ignore')
+					if char2 == 'H':  # Up arrow
+						pass
+					elif char2 == 'P':  # Down arrow
+						pass
+					elif char2 == 'K':  # Left arrow
+						pass
+					elif char2 == 'M':  # Right arrow
+						pass
+					elif char2 == '\x53':  # Delete
+						pass
+				elif char == '\b' or char == '\x08':
 					if password2:
 						password2 = password2[:-1]
 						strength_indicator = PasswordStrength.get_indicator(password2)
@@ -2315,15 +2320,61 @@ def getpass_verify_with_strength(
 						f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K'
 					)
 					sys.stdout.flush()
-		finally:
-			termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+		else:
+			# Unix/Linux/Mac - use termios
+			import tty
+			import termios
 
-	if password != password2:
-		ConsoleLogger.show('error', 'Passwords do not match!')
-		ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
-		sys.exit(1)
+			fd = sys.stdin.fileno()
+			old_settings = termios.tcgetattr(fd)
 
-	return password
+			try:
+				tty.setraw(fd)
+
+				while True:
+					char = sys.stdin.read(1)
+
+					if char == '\r' or char == '\n':
+						sys.stdout.write('\033[?25h\n')
+						sys.stdout.flush()
+						break
+					elif char == '\x03':
+						sys.stdout.write('\033[?25h\n')
+						sys.stdout.flush()
+						termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+						sys.exit(0)
+					elif char == '\x04':
+						sys.stdout.write('\033[?25h\n')
+						sys.stdout.flush()
+						break
+					elif char == '\x7f' or char == '\b':
+						if password2:
+							password2 = password2[:-1]
+							strength_indicator = PasswordStrength.get_indicator(password2)
+							char_types = PasswordStrength.get_char_types(password2)
+							asterisks = '*' * len(password2)
+							sys.stdout.write(
+								f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K'
+							)
+							sys.stdout.flush()
+					elif char >= ' ' and len(char) == 1:
+						password2 += char
+						strength_indicator = PasswordStrength.get_indicator(password2)
+						char_types = PasswordStrength.get_char_types(password2)
+						asterisks = '*' * len(password2)
+						sys.stdout.write(
+							f'\r{white}[{reset}🔄{white}]{reset} {prompt2}{asterisks}  {strength_indicator}  {char_types}\033[K'
+						)
+						sys.stdout.flush()
+			finally:
+				termios.tcsetattr(fd, termios.TCSADRAIN, old_settings)
+
+		if password != password2:
+			ConsoleLogger.show('error', 'Passwords do not match!')
+			ConsoleLogger.show('error', 'Operation aborted due to password mismatch')
+			sys.exit(1)
+
+		return password
 
 
 # =========================
@@ -2335,11 +2386,11 @@ def parse_args(argv=None):
 	parser = argparse.ArgumentParser(
 		prog='crypt_tools.py',
 		description=(
-			f'{_help_heading("🔐", "Crypt Tools Help")}\n'
-			f'{_help_style("Beautiful, secure AES-GCM encryption for files and text.", TerminalColors.Foreground.WHITE)}'
+			f'{UIHelpers.heading("🔐", "Crypt Tools Help")}\n'
+			f'{UIHelpers.style("Beautiful, secure AES-GCM encryption for files and text.", TerminalColors.Foreground.WHITE)}'
 		),
 		epilog=(
-			f'{_help_heading("✨", "Tips")}\n'
+			f'{UIHelpers.heading("✨", "Tips")}\n'
 			'  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively\n'
 			'    (equivalent to .\\temp\\**\\*.txt).\n'
 			'  - Password prompts show a live strength indicator.\n'
@@ -2350,13 +2401,13 @@ def parse_args(argv=None):
 			'  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.\n'
 			'    This is not identical to VeraCrypt: the footer and extra length are visible forensically;\n'
 			'    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”\n\n'
-			f'{_help_heading("🌍", "Environment Variables")}\n'
+			f'{UIHelpers.heading("🌍", "Environment Variables")}\n'
 			'  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,\n'
 			'  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,\n'
 			'  CRYPT_TOOLS_LOG_ENABLED, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_DEBUG_ENABLED,\n'
 			'  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD,\n'
 			'  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN\n\n'
-			f'{_help_heading("⚙️", "Config Keys")}\n'
+			f'{UIHelpers.heading("⚙️", "Config Keys")}\n'
 			'  compress, compression, default_compression, kdf, default_kdf,\n'
 			'  iterations, default_iterations, log, logging, log_enabled,\n'
 			'  debug, debug_enabled, password, default_password,\n'
@@ -2367,24 +2418,31 @@ def parse_args(argv=None):
 		formatter_class=argparse.RawTextHelpFormatter,
 		add_help=False,
 	)
-	utility_group = parser.add_argument_group(_help_heading('🛠️', 'Utility'))
+	utility_group = parser.add_argument_group(UIHelpers.heading('🛠️', 'Utility'))
 	utility_group.add_argument(
-		'--generate-keyfile', dest='generate_keyfile', nargs='?', const='key.txt',
-		help='Generate a random key file and exit (default: key.txt)'
+		'--generate-keyfile',
+		dest='generate_keyfile',
+		nargs='?',
+		const='key.txt',
+		help='Generate a random key file and exit (default: key.txt)',
 	)
 	utility_group.add_argument('--debug', action='store_true', help='Enable debug mode')
 	utility_group.add_argument('--log', action='store_true', help='Enable logging to file')
 	utility_group.add_argument('-v', '--version', action='version', version=Config.VERSION)
-	utility_group.add_argument('-h', '--help', action='help', help='Show this help message and exit')
+	utility_group.add_argument(
+		'-h', '--help', action='help', help='Show this help message and exit'
+	)
 
-	mode_group = parser.add_argument_group(_help_heading('🎯', 'Modes')).add_mutually_exclusive_group()
+	mode_group = parser.add_argument_group(
+		UIHelpers.heading('🎯', 'Modes')
+	).add_mutually_exclusive_group()
 	mode_group.add_argument('-e', '--encrypt', action='store_true', help='Encrypt mode (default)')
 	mode_group.add_argument('-d', '--decrypt', action='store_true', help='Decrypt mode')
 	mode_group.add_argument(
 		'--inspect', action='store_true', help='Inspect encrypted file metadata'
 	)
 
-	input_group = parser.add_argument_group(_help_heading('📥', 'Input & Output'))
+	input_group = parser.add_argument_group(UIHelpers.heading('📥', 'Input & Output'))
 	group = input_group.add_mutually_exclusive_group()
 	group.add_argument('-t', '--text', help='Text to process')
 	group.add_argument(
@@ -2403,7 +2461,7 @@ def parse_args(argv=None):
 		help='Browse and choose a file or directory interactively',
 	)
 
-	secret_group = parser.add_argument_group(_help_heading('🔑', 'Passwords & Secrets'))
+	secret_group = parser.add_argument_group(UIHelpers.heading('🔑', 'Passwords & Secrets'))
 	secret_group.add_argument(
 		'-p',
 		'--password',
@@ -2432,7 +2490,7 @@ def parse_args(argv=None):
 		help='Hidden password for --hidden-vol; with -d --hidden can be used instead of -p',
 	)
 
-	file_group = parser.add_argument_group(_help_heading('📦', 'File & Container Behavior'))
+	file_group = parser.add_argument_group(UIHelpers.heading('📦', 'File & Container Behavior'))
 	file_group.add_argument('-c', '--compress', action='store_true', help='Enable compression')
 	file_group.add_argument(
 		'--hidden-vol',
@@ -2455,7 +2513,7 @@ def parse_args(argv=None):
 		help='Recursively process directories or wildcard patterns (uses ** for subfolders)',
 	)
 
-	crypto_group = parser.add_argument_group(_help_heading('🧬', 'Crypto Tuning'))
+	crypto_group = parser.add_argument_group(UIHelpers.heading('🧬', 'Crypto Tuning'))
 	crypto_group.add_argument(
 		'--kdf',
 		choices=['pbkdf2', 'argon2'],
@@ -2496,19 +2554,19 @@ def main(argv=None):
 	Banner.show()
 	# If argv is None, argparse uses sys.argv[1:] automatically.
 	# If argv is passed (from tests), it uses that list.
-	cli_overrides = _detect_cli_overrides(argv)
+	cli_overrides = ConfigParser.detect_cli_overrides(argv)
 	args = parse_args(argv)
 	try:
-		config_path, config_defaults, env_defaults = _load_runtime_defaults(args.config)
+		config_path, config_defaults, env_defaults = ConfigParser.load_defaults(args.config)
 	except ValueError as e:
 		ConsoleLogger.show('error', str(e))
 		sys.exit(1)
-	args = _apply_runtime_defaults(args, cli_overrides, config_defaults, env_defaults)
+	args = ConfigParser.apply_defaults(args, cli_overrides, config_defaults, env_defaults)
 	engine = CryptoEngine()
 
 	# Handle key file generation
 	if args.generate_keyfile:
-		if generate_keyfile(args.generate_keyfile):
+		if KeyFileUtils.generate(args.generate_keyfile):
 			sys.exit(0)
 		else:
 			sys.exit(1)
@@ -2879,7 +2937,7 @@ def main(argv=None):
 	keyfile_data = None
 	if args.keyfile:
 		ConsoleLogger.show('info', f'Using key file: {args.keyfile}', icon='🔐')
-		keyfile_data = read_keyfile(args.keyfile)
+		keyfile_data = KeyFileUtils.read(args.keyfile)
 		if keyfile_data is None:
 			ConsoleLogger.show('error', 'Operation aborted: Could not load key file')
 			abort(1)
@@ -2918,7 +2976,7 @@ def main(argv=None):
 		and os.path.isfile(args.file)
 	):
 		try:
-			threshold_requirements = inspect_threshold_requirements_from_path(args.file)
+			threshold_requirements = HeaderParser.inspect_threshold(path=args.file)
 		except Exception as e:
 			ConsoleLogger.show('debug', f'Could not inspect threshold requirements: {e}')
 
@@ -2926,7 +2984,7 @@ def main(argv=None):
 	# Only prompt for password if not provided (None), not if empty string was explicitly passed
 	if args.hidden_vol:
 		if pw_outer is None:
-			pw_outer = getpass_verify_with_strength(
+			pw_outer = PasswordUtils.verify_with_strength(
 				'Enter decoy (outer) password: ',
 				'Verify decoy (outer) password: ',
 			)
@@ -2934,7 +2992,7 @@ def main(argv=None):
 		else:
 			ConsoleLogger.show('debug', 'Decoy password provided via command line')
 		if pw_hidden is None:
-			pw_hidden = getpass_verify_with_strength(
+			pw_hidden = PasswordUtils.verify_with_strength(
 				'Enter hidden volume password: ',
 				'Verify hidden volume password: ',
 			)
@@ -2948,7 +3006,9 @@ def main(argv=None):
 			f'Threshold-encrypted file detected: {num_passwords_needed} password(s) required',
 		)
 		for i in range(len(args.password), num_passwords_needed):
-			pw = getpass_with_strength(f'Enter password {i + 1}/{num_passwords_needed}: ')
+			pw = PasswordUtils.prompt_with_strength(
+				f'Enter password {i + 1}/{num_passwords_needed}: '
+			)
 			if not pw:
 				ConsoleLogger.show('error', 'Password cannot be empty')
 				abort(1)
@@ -2958,7 +3018,9 @@ def main(argv=None):
 		if len(args.password) < num_passwords_needed:
 			ConsoleLogger.show('info', f'Threshold mode: need {num_passwords_needed} passwords')
 			for i in range(len(args.password), num_passwords_needed):
-				pw = getpass_with_strength(f'Enter password {i + 1}/{num_passwords_needed}: ')
+				pw = PasswordUtils.prompt_with_strength(
+					f'Enter password {i + 1}/{num_passwords_needed}: '
+				)
 				if not pw:
 					ConsoleLogger.show('error', 'Password cannot be empty')
 					abort(1)
@@ -2983,10 +3045,10 @@ def main(argv=None):
 				args.password = args.password_hidden
 				ConsoleLogger.show('debug', 'Using --password-hidden for inner decrypt')
 			elif not args.decrypt:
-				args.password = getpass_verify_with_strength()
+				args.password = PasswordUtils.verify_with_strength()
 				ConsoleLogger.show('info', 'Password verification entered', icon='🔄')
 			else:
-				args.password = getpass_with_strength()
+				args.password = PasswordUtils.prompt_with_strength()
 				ConsoleLogger.show('info', 'Password entered by user', icon='🔑')
 
 	if args.text:
@@ -3001,7 +3063,7 @@ def main(argv=None):
 			b64_result = base64.b64encode(result).decode('utf-8')
 			ConsoleLogger.show('success', f'Encrypted (Base64): {b64_result}')
 			if args.qr:
-				show_qr_code(b64_result)
+				UIHelpers.show_qr(b64_result)
 			elapsed_time = time.time() - start_time
 			ConsoleLogger.show(
 				'info', f'Output encrypted text length: {len(b64_result)} characters'
@@ -3084,7 +3146,7 @@ def main(argv=None):
 							out_path = file_path + '.dec'
 
 						ConsoleLogger.show('info', f'Processing: {file_path}', icon='📄')
-						foot = parse_hidden_container_footer_from_path(file_path)
+						foot = HeaderParser.parse_hidden_footer(file_path)
 						if foot:
 							ok_batch = engine.decrypt_hidden_container(
 								file_path,
@@ -3180,7 +3242,7 @@ def main(argv=None):
 						)
 					else:
 						# For non-threshold encryption, extract single password from list
-						single_password = _single_password_arg(args.password)
+						single_password = PasswordUtils.normalize(args.password)
 						ok = engine.encrypt_file(
 							target,
 							output_file,
@@ -3191,7 +3253,7 @@ def main(argv=None):
 							iterations,
 						)
 				else:
-					foot = parse_hidden_container_footer_from_path(target)
+					foot = HeaderParser.parse_hidden_footer(target)
 					if foot:
 						ok = engine.decrypt_hidden_container(
 							target,
@@ -3232,7 +3294,7 @@ def main(argv=None):
 							)
 						else:
 							# For non-threshold files, extract single password from list
-							single_password = _single_password_arg(args.password)
+							single_password = PasswordUtils.normalize(args.password)
 							ok = engine.decrypt_file(
 								target, output_file, single_password, args.compress, keyfile_data
 							)

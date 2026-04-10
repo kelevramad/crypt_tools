@@ -128,7 +128,7 @@ test('renderQrCode helper returns rendered output', async () => {
   };
 
   try {
-    const qr = await cryptTools.renderQrCode('hello');
+    const qr = await cryptTools.UIHelpers.renderQrCode('hello');
     assert.ok(qr.length > 0);
     assert.match(printed, /QR Code Output:/);
   } finally {
