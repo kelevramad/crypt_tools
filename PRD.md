@@ -337,6 +337,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 |---------|------|---------|
 | 2.6.2 | 2026-04-10 | Fixed recursive decrypt output filename to match non-recursive behavior (files like `test.txt.enc` now decrypt to `test.txt` instead of `test.txt.dec`), fixed missing `UIHelpers.file_selector` reference in Python CLI |
 | 2.6.1 | 2026-04-10 | Added tests for default keyfile name (`key.txt`) when `--generate-keyfile` is called without a path, ensuring consistent behavior and documentation alignment |
+| 2.6.0 | 2026-04-09 | Added default filename (`key.txt`) for `--generate-keyfile` when no path is provided, switched `--generate-keyfile` to emit MEGA-style textual recovery keys, kept backward compatibility with legacy binary key files, compacted Python QR output to match Node more closely, cleaned up duplicate error lines, and ensured session end logging appears on failure paths |
 | 2.5.0 | 2026-04-03 | Added interactive file selection (`--select`) using a terminal UI, QR code output for text encryption (`--qr`), new Python/Node QR and TUI dependencies, and test coverage for the new flows |
 | 2.4.3 | 2026-04-03 | Added grouped/colorized CLI help, expanded `--help` with environment variables and config keys, and normalized release versions across scripts, docs, and package metadata |
 | 2.4.2 | 2026-04-03 | Added configuration-file defaults (`--config`, `.crypt_tools.{conf,json,yml,yaml}`), environment-variable defaults (`CRYPT_TOOLS_*`), README examples, and sample config templates |
