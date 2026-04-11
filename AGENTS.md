@@ -14,6 +14,34 @@ Use the toolchain that matches the entrypoint you are changing.
 - `npm test`: run the Node test suite with `node --test`.
 - `npm run coverage`: collect Node coverage via `c8`.
 
+## Build Executable Command
+When the user asks to build a new version, run these commands in sequence:
+
+1. Update version in scripts:
+   - `crypt_tools.py`: Update `Config.VERSION` in the `Config` class
+   - `crypt_tools.js`: Update `Config.VERSION` in the `Config` class
+
+2. Update docs:
+   - `PRD.md`: Update version in "Executive Summary" table
+   - `README.md`: Update version in "Technical Details" section
+   - `README_NODEJS.md`: Update version in "Technical Details" section
+
+3. Update `version_info.txt` with new version number
+
+4. Build the exe file:
+```bash
+uvx --with pycryptodome --with tqdm pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_tools.py
+```
+
+5. Copy exe to root:
+```bash
+cp ./dist/crypt_tools.exe .
+```
+
+6. Push and sync to git
+
+7. Create a new GitHub release
+
 ## Coding Style & Naming Conventions
 Keep changes small and CLI-focused. Python formatting follows Ruff settings in `pyproject.toml`: 100-character line length, single quotes, and tabs for indentation. Python tests and functions use `snake_case`; classes use `PascalCase`. In JavaScript, match the existing file style in `crypt_tools.js` and `tests/*.test.js`; current tests use semicolons, `const`, and 2-space indentation. Name new tests after the behavior they validate, for example `test_hidden_volume_roundtrip` or `hidden volume decrypts with inner password`.
 

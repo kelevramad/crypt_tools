@@ -13,7 +13,7 @@
 - **Rich CLI** with password strength indicators, progress bars, emojis, and optional file logging
 
 **Author:** Center For Cyber Intelligence  
-**Current Version:** 2.4.0  
+**Current Version:** 2.6.2  
 **License:** Proprietary
 
 ---
