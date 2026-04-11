@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.6.2 |
+| **Version** | 2.7.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -55,6 +55,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | **Interactive File Selection** | Browse and choose a file or directory from a terminal UI with `--select` |
 | **QR Code Output** | Render encrypted text as a terminal QR code with `--qr` |
 | **Key File Support** | Generate and use key files for two-factor encryption |
+| **Recovery Key Generation** | Generate backup recovery keys during encryption for emergency access without password |
 | **Hidden volumes (containers)** | Optional two-layer file: decoy payload (outer password) + real payload (hidden password); `CTHV` footer marks split; file-only, not full-disk VeraCrypt semantics |
 
 ### 3.2 Security Features
@@ -84,7 +85,12 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 ```
 [Magic: 4 bytes] + [Version: 1 byte] + [Flags: 1 byte] + [KDF ID: 1 byte] + [Reserved: 1 byte] +
 [Salt Length: 1 byte] + [Nonce Length: 1 byte] + [Tag Length: 1 byte] + [KDF Param Length: 1 byte] +
-[KDF Params: variable] + [Salt: 16 bytes] + [Nonce: 12 bytes] + [Ciphertext: variable] + [GCM Tag: 16 bytes]
+[KDF Params: variable] + [Salt: 16 bytes] + [Nonce: 12 bytes] + [Recovery Blob: variable (optional)] + [Ciphertext: variable] + [GCM Tag: 16 bytes]
+```
+
+**Recovery Blob Format (when FLAG_RECOVERY is set):**
+```
+[Recovery Length: 2 bytes] + [Recovery Nonce: 12 bytes] + [Encrypted Key: 32 bytes] + [Recovery Tag: 16 bytes]
 ```
 
 **In-Memory Format:**
@@ -153,6 +159,7 @@ Provide users with a lightweight, secure, and efficient tool for protecting sens
 | `--select` | — | Launch interactive file/directory selection | Disabled |
 | `--password` | `-p` | Password | Interactive prompt |
 | `--keyfile` | — | Key file path for encryption/decryption | None |
+| `--recovery-key` | — | Generate/use recovery key file (default: `recovery_key.txt`) | None |
 | `--compress` | `-c` | Enable zlib compression | Disabled |
 | `--recursive` | `-r` | Process directories or wildcard patterns recursively | Disabled |
 | `--kdf` | — | Key derivation function: `pbkdf2` (default) or `argon2` | `pbkdf2` |
@@ -233,6 +240,15 @@ uv run crypt_tools.py --encrypt -f document.txt -p "password" --keyfile mykey.tx
 
 # Decrypt with key file
 uv run crypt_tools.py --decrypt -f document.enc --keyfile mykey.txt -p "password"
+
+# Encrypt with recovery key (generates recovery_key.txt by default)
+uv run crypt_tools.py --encrypt -f document.txt -p "password" --recovery-key
+
+# Encrypt with custom recovery key path
+uv run crypt_tools.py --encrypt -f document.txt -p "password" --recovery-key my_recovery.txt
+
+# Decrypt with recovery key (no password needed)
+uv run crypt_tools.py --decrypt -f document.enc --recovery-key recovery_key.txt
 
 # Encrypt with Argon2 (more secure, recommended)
 uv run crypt_tools.py --encrypt -f document.txt -p "password" --kdf argon2
@@ -335,6 +351,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.7.0 | 2026-04-11 | Added recovery key generation (`--recovery-key`) for emergency access without password, recovery key stored in encrypted file header as AES-GCM encrypted blob, inspect mode shows recovery key status |
 | 2.6.2 | 2026-04-10 | Fixed recursive decrypt output filename to match non-recursive behavior (files like `test.txt.enc` now decrypt to `test.txt` instead of `test.txt.dec`), fixed missing `UIHelpers.file_selector` reference in Python CLI |
 | 2.6.1 | 2026-04-10 | Added tests for default keyfile name (`key.txt`) when `--generate-keyfile` is called without a path, ensuring consistent behavior and documentation alignment |
 | 2.6.0 | 2026-04-09 | Added default filename (`key.txt`) for `--generate-keyfile` when no path is provided, switched `--generate-keyfile` to emit MEGA-style textual recovery keys, kept backward compatibility with legacy binary key files, compacted Python QR output to match Node more closely, cleaned up duplicate error lines, and ensured session end logging appears on failure paths |

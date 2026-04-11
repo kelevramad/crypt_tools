@@ -158,7 +158,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.6.2';
+    static VERSION = '2.7.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -167,10 +167,14 @@ class Config {
     static FLAG_TEXT = 0x02;
     static FLAG_KEYFILE = 0x04;
     static FLAG_THRESHOLD = 0x08;
+    static FLAG_RECOVERY = 0x10;
     static THRESHOLD_MAGIC = Buffer.from('CTTH');
     static KDF_PBKDF2 = 0x01;
     static KDF_ARGON2 = 0x02;
     static FIXED_HEADER_SIZE = 16;
+
+    // Recovery key
+    static RECOVERY_KEY_SIZE = 32;  // 256 bits
 
     /** Hidden-volume container: [CT02_outer][CT02_hidden][FOOTER_MAGIC][uint64_be outer_total_len] */
     static CONTAINER_FOOTER_MAGIC = Buffer.from('CTHV');
@@ -966,11 +970,12 @@ class HeaderParser {
         return buf.readUInt32BE(0);
     }
 
-    static buildHeader({ compress = false, isText = false, useKeyfile = false, kdfId = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS } = {}) {
+    static buildHeader({ compress = false, isText = false, useKeyfile = false, useRecovery = false, kdfId = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS } = {}) {
         let flags = 0;
         if (compress) flags |= Config.FLAG_COMPRESS;
         if (isText) flags |= Config.FLAG_TEXT;
         if (useKeyfile) flags |= Config.FLAG_KEYFILE;
+        if (useRecovery) flags |= Config.FLAG_RECOVERY;
 
         const kdfParams = HeaderParser.uint32ToBuffer(iterations);
         return Buffer.concat([
@@ -1011,6 +1016,7 @@ class HeaderParser {
             compress: Boolean(flags & Config.FLAG_COMPRESS),
             isText: Boolean(flags & Config.FLAG_TEXT),
             useKeyfile: Boolean(flags & Config.FLAG_KEYFILE),
+            useRecovery: Boolean(flags & Config.FLAG_RECOVERY),
             kdfId,
             iterations,
             saltLen,
@@ -1164,6 +1170,7 @@ class HeaderParser {
                 legacy: metadata.isLegacy,
                 compression: metadata.compress ? 'enabled' : 'disabled',
                 keyfile: metadata.useKeyfile ? 'enabled' : 'disabled',
+                recoveryKey: metadata.useRecovery ? 'enabled' : 'disabled',
                 kdf: metadata.kdfId === Config.KDF_PBKDF2 ? 'PBKDF2-SHA256' : (metadata.kdfId === Config.KDF_ARGON2 ? 'Argon2id' : `unknown(${metadata.kdfId})`),
                 iterations: metadata.iterations,
                 saltLength: metadata.saltLen,
@@ -1266,6 +1273,103 @@ class KeyFileUtils {
     }
 }
 
+class RecoveryKeyUtils {
+    /**
+     * Generate a random 32-byte recovery key.
+     */
+    static generate() {
+        return crypto.randomBytes(Config.RECOVERY_KEY_SIZE);
+    }
+
+    /**
+     * Encrypt the derived key with the recovery key using AES-GCM.
+     * Returns: nonce (12) + ciphertext (32) + tag (16) = 60 bytes
+     */
+    static encryptDerivedKey(derivedKey, recoveryKey) {
+        const nonce = crypto.randomBytes(12);
+        const cipher = crypto.createCipheriv('aes-256-gcm', recoveryKey, nonce);
+        let ciphertext = cipher.update(derivedKey);
+        ciphertext = Buffer.concat([ciphertext, cipher.final()]);
+        const tag = cipher.getAuthTag();
+        return Buffer.concat([nonce, ciphertext, tag]);
+    }
+
+    /**
+     * Decrypt the recovery blob to retrieve the original derived key.
+     * Returns the derived key or null if decryption fails.
+     */
+    static decryptDerivedKey(encryptedBlob, recoveryKey) {
+        if (encryptedBlob.length < 12 + Config.RECOVERY_KEY_SIZE + 16) {
+            return null;
+        }
+        const nonce = encryptedBlob.slice(0, 12);
+        const ciphertext = encryptedBlob.slice(12, -16);
+        const tag = encryptedBlob.slice(-16);
+
+        try {
+            const decipher = crypto.createDecipheriv('aes-256-gcm', recoveryKey, nonce);
+            decipher.setAuthTag(tag);
+            let decrypted = decipher.update(ciphertext);
+            decrypted = Buffer.concat([decrypted, decipher.final()]);
+            return decrypted;
+        } catch (e) {
+            return null;
+        }
+    }
+
+    /**
+     * Write recovery key to file in MEGA-style base64 format.
+     */
+    static async writeRecoveryKey(filePath, recoveryKey) {
+        try {
+            const b64Key = recoveryKey.toString('base64url').replace(/=/g, '');
+            fs.writeFileSync(filePath, b64Key + '\n', { encoding: 'utf-8' });
+            ConsoleLogger.show('success', `Recovery key file generated: ${filePath}`, '🔑');
+            ConsoleLogger.show('info', `Key size: ${Config.RECOVERY_KEY_SIZE} bytes (${Config.RECOVERY_KEY_SIZE * 8} bits)`);
+            ConsoleLogger.show('warning', 'Store recovery key securely - it can decrypt your files without a password!', '🔐');
+            return true;
+        } catch (e) {
+            ConsoleLogger.show('error', `Failed to write recovery key: ${e.message}`);
+            return false;
+        }
+    }
+
+    /**
+     * Read and validate a recovery key file.
+     */
+    static readRecoveryKey(filePath) {
+        try {
+            if (!fs.existsSync(filePath)) {
+                throw new Error(`Recovery key file not found: ${filePath}`);
+            }
+
+            const textData = fs.readFileSync(filePath, 'utf-8').trim();
+
+            if (!textData) {
+                throw new Error('Recovery key file is empty');
+            }
+
+            if (!/^[A-Za-z0-9_-]+$/.test(textData)) {
+                throw new Error('Recovery key contains invalid characters');
+            }
+
+            // Add padding for base64 decoding
+            const padding = '='.repeat((4 - textData.length % 4) % 4);
+            const keyData = Buffer.from(textData + padding, 'base64url');
+
+            if (keyData.length !== Config.RECOVERY_KEY_SIZE) {
+                throw new Error(`Invalid recovery key size: ${keyData.length} bytes (expected ${Config.RECOVERY_KEY_SIZE})`);
+            }
+
+            ConsoleLogger.show('debug', `Read recovery key: ${filePath} (${keyData.length} bytes)`);
+            return keyData;
+        } catch (e) {
+            ConsoleLogger.show('error', `Failed to read recovery key: ${e.message}`);
+            return null;
+        }
+    }
+}
+
 // =========================
 // Core Logic (Engine)
 // =========================
@@ -1321,14 +1425,30 @@ class CryptoEngine {
         return `${sizeNum.toFixed(2)}${units[unitIndex]}`;
     }
 
-    async encryptData(data, password, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
+    async encryptData(data, password, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS, recoveryKeyPath = null) {
         ConsoleLogger.show('debug', `Starting in-memory data encryption (${data.length} bytes input)`);
         const salt = crypto.randomBytes(Config.SALT_SIZE);
         const nonce = crypto.randomBytes(Config.NONCE_SIZE);
         const useKeyfile = keyfileData !== null;
-        const header = HeaderParser.buildHeader({ isText: true, useKeyfile, kdfId: kdfType, iterations });
+        const useRecovery = recoveryKeyPath !== null;
+
+        const header = HeaderParser.buildHeader({ isText: true, useKeyfile, useRecovery, kdfId: kdfType, iterations });
         ConsoleLogger.show('debug', `Generated salt (${Config.SALT_SIZE} bytes) and nonce (${Config.NONCE_SIZE} bytes)`);
         const key = await this._deriveKey(password, salt, keyfileData, kdfType, iterations);
+
+        // Generate and encrypt recovery key if requested
+        let recoveryBlob = null;
+        if (useRecovery) {
+            ConsoleLogger.show('info', 'Generating recovery key...', '🔑');
+            const recoveryKey = RecoveryKeyUtils.generate();
+            recoveryBlob = RecoveryKeyUtils.encryptDerivedKey(key, recoveryKey);
+
+            // Write recovery key to file
+            if (!await RecoveryKeyUtils.writeRecoveryKey(recoveryKeyPath, recoveryKey)) {
+                ConsoleLogger.show('error', 'Failed to generate recovery key file');
+                throw new Error('Failed to write recovery key file');
+            }
+        }
 
         ConsoleLogger.show('debug', 'Initializing AES-GCM cipher');
         const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
@@ -1336,24 +1456,31 @@ class CryptoEngine {
         const tag = cipher.getAuthTag();
         ConsoleLogger.show('debug', `Encryption complete. Ciphertext size: ${encrypted.length} bytes, Tag size: ${tag.length} bytes`);
 
-        return Buffer.concat([header, salt, nonce, encrypted, tag]);
+        // Build final output
+        const parts = [header, salt, nonce];
+        if (recoveryBlob) {
+            const lenBuf = Buffer.alloc(2);
+            lenBuf.writeUInt16BE(recoveryBlob.length, 0);
+            parts.push(lenBuf, recoveryBlob);
+        }
+        parts.push(encrypted, tag);
+        return Buffer.concat(parts);
     }
 
-    async decryptData(encData, password, keyfileData = null) {
+    async decryptData(encData, password, keyfileData = null, recoveryKeyData = null) {
         try {
             ConsoleLogger.show('debug', `Starting in-memory data decryption. Total input size: ${encData.length} bytes`);
             const metadata = HeaderParser.parseFormat(encData, { textPayload: true });
-            const overhead = metadata.headerLen + metadata.saltLen + metadata.nonceLen + metadata.tagLen;
-            if (encData.length < overhead) {
-                ConsoleLogger.show('debug', 'Input data is smaller than minimum overhead');
-                throw new Error('Data too short');
-            }
 
             let salt;
             let nonce;
             let tag;
             let ciphertext;
+            let useRecovery = false;
+            let recoveryBlob = null;
+
             if (metadata.isLegacy) {
+                const overhead = metadata.headerLen + metadata.saltLen + metadata.nonceLen + metadata.tagLen;
                 salt = encData.subarray(0, metadata.saltLen);
                 nonce = encData.subarray(metadata.saltLen, metadata.saltLen + metadata.nonceLen);
                 tag = encData.subarray(metadata.saltLen + metadata.nonceLen, overhead);
@@ -1365,18 +1492,46 @@ class CryptoEngine {
                 salt = encData.subarray(saltStart, nonceStart);
                 nonce = encData.subarray(nonceStart, nonceEnd);
                 tag = encData.subarray(encData.length - metadata.tagLen);
-                ciphertext = encData.subarray(nonceEnd, encData.length - metadata.tagLen);
+
+                useRecovery = metadata.useRecovery || false;
+                let ciphertextOffset = 0;
+
+                if (useRecovery) {
+                    const recoveryLenPos = nonceEnd;
+                    const recoveryLen = encData.subarray(recoveryLenPos, recoveryLenPos + 2).readUInt16BE(0);
+                    recoveryBlob = encData.subarray(recoveryLenPos + 2, recoveryLenPos + 2 + recoveryLen);
+                    ciphertextOffset = 2 + recoveryLen;
+                    ConsoleLogger.show('debug', `Read recovery blob (${recoveryLen} bytes)`);
+                }
+
+                ciphertext = encData.subarray(nonceEnd + ciphertextOffset, encData.length - metadata.tagLen);
             }
             ConsoleLogger.show('debug', `Extracted salt, nonce, tag, and ciphertext (${ciphertext.length} bytes)`);
 
             const useKeyfile = metadata.useKeyfile || false;
             const kdfType = metadata.kdfId || Config.KDF_PBKDF2;
             const iterations = metadata.iterations || Config.PBKDF2_ITERATIONS;
-            if (useKeyfile && !keyfileData) {
-                ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
+
+            // Try to decrypt with recovery key first if provided
+            let key = null;
+            if (recoveryKeyData && useRecovery && recoveryBlob) {
+                ConsoleLogger.show('info', 'Attempting decryption with recovery key...', '🔑');
+                key = RecoveryKeyUtils.decryptDerivedKey(recoveryBlob, recoveryKeyData);
+                if (key) {
+                    ConsoleLogger.show('debug', 'Successfully recovered encryption key from recovery key');
+                } else {
+                    ConsoleLogger.show('warning', 'Recovery key decryption failed, falling back to password');
+                }
             }
 
-            const key = await this._deriveKey(password, salt, keyfileData || null, kdfType, iterations);
+            // Fall back to password-based key derivation
+            if (key === null) {
+                if (useKeyfile && !keyfileData) {
+                    ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
+                }
+                key = await this._deriveKey(password, salt, keyfileData || null, kdfType, iterations);
+            }
+
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption');
             const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
             decipher.setAuthTag(tag);
@@ -1392,7 +1547,7 @@ class CryptoEngine {
         }
     }
 
-    async encryptFile(inputPath, outputPath, password, compress = false, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
+    async encryptFile(inputPath, outputPath, password, compress = false, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS, recoveryKeyPath = null) {
         try {
             ConsoleLogger.show('debug', `Starting file encryption: ${inputPath} -> ${outputPath}`);
             const stats = fs.statSync(inputPath);
@@ -1402,10 +1557,26 @@ class CryptoEngine {
             const salt = crypto.randomBytes(Config.SALT_SIZE);
             const nonce = crypto.randomBytes(Config.NONCE_SIZE);
             const useKeyfile = keyfileData !== null;
+            const useRecovery = recoveryKeyPath !== null;
+
             const key = await this._deriveKey(password, salt, keyfileData, kdfType, iterations);
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher');
             const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
-            const header = HeaderParser.buildHeader({ compress, useKeyfile, kdfId: kdfType, iterations });
+            const header = HeaderParser.buildHeader({ compress, useKeyfile, useRecovery, kdfId: kdfType, iterations });
+
+            // Generate and encrypt recovery key if requested
+            let recoveryBlob = null;
+            if (useRecovery) {
+                ConsoleLogger.show('info', 'Generating recovery key...', '🔑');
+                const recoveryKey = RecoveryKeyUtils.generate();
+                recoveryBlob = RecoveryKeyUtils.encryptDerivedKey(key, recoveryKey);
+
+                // Write recovery key to file
+                if (!await RecoveryKeyUtils.writeRecoveryKey(recoveryKeyPath, recoveryKey)) {
+                    ConsoleLogger.show('error', 'Failed to generate recovery key file');
+                    return false;
+                }
+            }
 
             const desc = compress ? '[🔒] Compressing & Encrypting' : '[🔒] Encrypting';
             const label = compress ? '[🔒] Compressing & Encrypting:' : '[🔒] Encrypting:';
@@ -1419,6 +1590,16 @@ class CryptoEngine {
             outputStream.write(header);
             outputStream.write(salt);
             outputStream.write(nonce);
+
+            // Write recovery blob if present
+            if (recoveryBlob) {
+                ConsoleLogger.show('debug', `Writing recovery blob (${recoveryBlob.length} bytes)`);
+                // Write length (2 bytes big-endian) + blob
+                const lenBuf = Buffer.alloc(2);
+                lenBuf.writeUInt16BE(recoveryBlob.length, 0);
+                outputStream.write(lenBuf);
+                outputStream.write(recoveryBlob);
+            }
 
             const readStream = fs.createReadStream(inputPath, { highWaterMark: Config.CHUNK_SIZE });
             readStream.on('data', (chunk) => progress.tick(chunk.length));
@@ -1449,7 +1630,7 @@ class CryptoEngine {
         }
     }
 
-    async decryptFile(inputPath, outputPath, password, compress = false, keyfileData = null, sliceStart = 0, sliceEnd = null) {
+    async decryptFile(inputPath, outputPath, password, compress = false, keyfileData = null, recoveryKeyData = null, sliceStart = 0, sliceEnd = null) {
         try {
             const fileSizeOnDisk = fs.statSync(inputPath).size;
             const end = sliceEnd == null ? fileSizeOnDisk : sliceEnd;
@@ -1480,6 +1661,7 @@ class CryptoEngine {
             }
 
             const useKeyfile = metadata.useKeyfile || false;
+            const useRecovery = metadata.useRecovery || false;
             const kdfType = metadata.kdfId || Config.KDF_PBKDF2;
             const iterations = metadata.iterations || Config.PBKDF2_ITERATIONS;
 
@@ -1489,17 +1671,46 @@ class CryptoEngine {
             const hdrOff = sliceStart + metadata.headerLen;
             fs.readSync(fd, salt, 0, metadata.saltLen, hdrOff);
             fs.readSync(fd, nonce, 0, metadata.nonceLen, hdrOff + metadata.saltLen);
+
+            // Read recovery blob if present
+            let recoveryBlob = null;
+            let ciphertextOffset = 0;
+            if (useRecovery) {
+                const recoveryLenBuf = Buffer.alloc(2);
+                fs.readSync(fd, recoveryLenBuf, 0, 2, hdrOff + metadata.saltLen + metadata.nonceLen);
+                const recoveryLen = recoveryLenBuf.readUInt16BE(0);
+                recoveryBlob = Buffer.alloc(recoveryLen);
+                fs.readSync(fd, recoveryBlob, 0, recoveryLen, hdrOff + metadata.saltLen + metadata.nonceLen + 2);
+                ciphertextOffset = 2 + recoveryLen;
+                ConsoleLogger.show('debug', `Read recovery blob (${recoveryLen} bytes)`);
+            }
+
             fs.readSync(fd, tag, 0, metadata.tagLen, sliceStart + fileSize - metadata.tagLen);
             fs.closeSync(fd);
 
-            const ciphertextLen = fileSize - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen;
+            const ciphertextLen = fileSize - metadata.headerLen - metadata.saltLen - metadata.nonceLen - metadata.tagLen - ciphertextOffset;
             ConsoleLogger.show('debug', `Read salt (${salt.length} bytes), nonce (${nonce.length} bytes), ciphertext (${ciphertextLen} bytes), and tag (${tag.length} bytes)`);
 
-            if (useKeyfile && !keyfileData) {
-                ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
+            // Try to decrypt with recovery key first if provided
+            let key = null;
+            if (recoveryKeyData && useRecovery && recoveryBlob) {
+                ConsoleLogger.show('info', 'Attempting decryption with recovery key...', '🔑');
+                key = RecoveryKeyUtils.decryptDerivedKey(recoveryBlob, recoveryKeyData);
+                if (key) {
+                    ConsoleLogger.show('debug', 'Successfully recovered encryption key from recovery key');
+                } else {
+                    ConsoleLogger.show('warning', 'Recovery key decryption failed, falling back to password');
+                }
             }
 
-            const key = await this._deriveKey(password, salt, keyfileData || null, kdfType, iterations);
+            // Fall back to password-based key derivation
+            if (key === null) {
+                if (useKeyfile && !keyfileData) {
+                    ConsoleLogger.show('warning', 'Encrypted with key file but none provided. Attempting password-only decryption.');
+                }
+                key = await this._deriveKey(password, salt, keyfileData || null, kdfType, iterations);
+            }
+
             ConsoleLogger.show('debug', 'Initializing AES-GCM cipher for decryption');
 
             const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
@@ -1515,7 +1726,7 @@ class CryptoEngine {
             const progress = ProgressBarUtils.create(label, ciphertextLen);
             progress.render();
 
-            const cipherStart = sliceStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen;
+            const cipherStart = sliceStart + metadata.headerLen + metadata.saltLen + metadata.nonceLen + ciphertextOffset;
             const cipherEnd = sliceStart + fileSize - metadata.tagLen - 1;
             const readStream = fs.createReadStream(inputPath, {
                 start: cipherStart,
@@ -1811,7 +2022,7 @@ class CryptoEngine {
             const ciphertext = fileData.subarray(cipherStart, cipherStart + ciphertextLen);
             const tag = fileData.subarray(-metadata.tagLen);
             ConsoleLogger.show('debug', `cipherStart=${cipherStart}, ciphertextLen=${ciphertextLen}`);
-            
+
             const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
             decipher.setAuthTag(tag);
 
@@ -1819,11 +2030,11 @@ class CryptoEngine {
             const label = effectiveCompress ? '[🔓] Decrypting & Decompressing:' : '[🔓] Decrypting:';
             const progress = ProgressBarUtils.create(label, ciphertextLen);
             progress.render();
-            
+
             progress.tick(ciphertextLen);
-            
+
             const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
-            
+
             if (effectiveCompress) {
                 const decompressed = zlib.inflateSync(decrypted);
                 fs.writeFileSync(outputPath, decompressed);
@@ -2252,6 +2463,7 @@ async function main() {
         .option('--hidden', 'With -d -f, decrypt inner/hidden volume (password is the hidden password)', false)
         .option('--password-outer <password>', 'Decoy password for --hidden-vol (optional; exposing via CLI is insecure)')
         .option('--password-hidden <password>', 'Hidden password for --hidden-vol; with -d --hidden can be used instead of -p')
+        .option('--recovery-key [path]', 'Generate/use recovery key file (default: recovery_key.txt); encrypt generates key, decrypt uses it')
         .option('-r, --recursive', 'Recursively process directories or wildcard patterns (uses ** for subfolders)', false)
         .option('--kdf <type>', 'Key derivation function: pbkdf2 (default) or argon2 (more secure)')
         .option('--iterations <count>', 'Number of iterations for KDF (default: 100000 for PBKDF2, 3 for Argon2)', parseInt)
@@ -2492,6 +2704,7 @@ async function main() {
         ConsoleLogger.show('info', `Legacy: ${details.legacy ? 'yes' : 'no'}`, '🕰️');
         ConsoleLogger.show('info', `Compression: ${details.compression}`, '🗜️');
         ConsoleLogger.show('info', `Keyfile: ${details.keyfile || 'disabled'}`, '🔑');
+        ConsoleLogger.show('info', `Recovery key: ${details.recoveryKey || 'disabled'}`, '🔐');
         ConsoleLogger.show('info', `KDF: ${details.kdf}`, '🧬');
         ConsoleLogger.show('info', `Iterations: ${details.iterations}`, '🔁');
         ConsoleLogger.show('info', `Threshold mode: ${details.thresholdMode}`, '🧩');
@@ -2608,6 +2821,33 @@ async function main() {
         ConsoleLogger.show('debug', 'No key file provided');
     }
 
+    // Handle recovery key
+    let recoveryKeyPath = null;
+    let recoveryKeyData = null;
+    if (options.recoveryKey) {
+        const recoveryKeyFile = options.recoveryKey === true ? 'recovery_key.txt' : options.recoveryKey;
+        if (options.decrypt) {
+            // In decrypt mode, load the recovery key file
+            recoveryKeyPath = recoveryKeyFile;
+            recoveryKeyData = RecoveryKeyUtils.readRecoveryKey(recoveryKeyPath);
+            if (!recoveryKeyData) {
+                ConsoleLogger.show('error', 'Operation aborted: Could not load recovery key file');
+                abort(1);
+            }
+            ConsoleLogger.show('success', 'Recovery key loaded successfully');
+        } else {
+            // In encrypt mode, use as output path for recovery key
+            recoveryKeyPath = recoveryKeyFile;
+            ConsoleLogger.show('info', `Recovery key will be saved to: ${recoveryKeyPath}`, '🔑');
+        }
+    }
+
+    // Validate recovery key usage
+    if (options.recoveryKey && options.hiddenVol) {
+        ConsoleLogger.show('error', '--recovery-key cannot be used with --hidden-vol');
+        abort(1);
+    }
+
     // Handle KDF selection
     options.kdf = options.kdf || 'pbkdf2';
     if (options.kdf && !['pbkdf2', 'argon2'].includes(options.kdf)) {
@@ -2709,7 +2949,7 @@ async function main() {
         // Default to encrypt if decrypt is not explicitly set
         if (!options.decrypt) {
             ConsoleLogger.show('info', 'Encrypting text...');
-            const result = await engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData, kdfType, iterations);
+            const result = await engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData, kdfType, iterations, recoveryKeyPath);
             const b64Result = result.toString('base64');
             ConsoleLogger.show('success', `Encrypted (Base64): ${b64Result}`);
             if (options.qr) {
@@ -2724,7 +2964,7 @@ async function main() {
             ConsoleLogger.show('info', 'Decrypting text...');
             ConsoleLogger.show('debug', 'Decoding Base64 text input');
             const rawData = Buffer.from(options.text, 'base64');
-            const result = await engine.decryptData(rawData, options.password, keyfileData);
+            const result = await engine.decryptData(rawData, options.password, keyfileData, recoveryKeyData);
             if (result) {
                 ConsoleLogger.show('success', `Decrypted: ${result.toString('utf-8')}`);
                 const elapsed = (Date.now() - startTime) / 1000;
@@ -2760,7 +3000,7 @@ async function main() {
 
                     const outPath = filePath + '.enc';
                     ConsoleLogger.show('info', `Processing: ${filePath}`, '📄');
-                    const result = await engine.encryptFile(filePath, outPath, options.password, options.compress, keyfileData, kdfType, iterations);
+                    const result = await engine.encryptFile(filePath, outPath, options.password, options.compress, keyfileData, kdfType, iterations, recoveryKeyPath);
                     if (result) {
                         successCount++;
                         const size = fs.statSync(outPath).size;
@@ -2794,7 +3034,7 @@ async function main() {
                         ConsoleLogger.show('error', `--hidden only applies to CTHV containers: ${filePath}`, '❌');
                         result = false;
                     } else {
-                        result = await engine.decryptFile(filePath, outPath, options.password, options.compress, keyfileData);
+                        result = await engine.decryptFile(filePath, outPath, options.password, options.compress, keyfileData, recoveryKeyData);
                     }
                     if (result) {
                         successCount++;
@@ -2873,7 +3113,7 @@ async function main() {
                     } else {
                         // For non-threshold encryption, extract single password from array
                         const singlePassword = PasswordUtils.normalize(options.password);
-                        ok = await engine.encryptFile(target, outputFile, singlePassword, options.compress, keyfileData, kdfType, iterations);
+                        ok = await engine.encryptFile(target, outputFile, singlePassword, options.compress, keyfileData, kdfType, iterations, recoveryKeyPath);
                     }
                 } else {
                     const foot = HeaderParser.parseHiddenFooter(target);
@@ -2913,7 +3153,7 @@ async function main() {
                         } else {
                             // For non-threshold files, extract single password from array
                             const singlePassword = PasswordUtils.normalize(options.password);
-                            ok = await engine.decryptFile(target, outputFile, singlePassword, options.compress, keyfileData);
+                            ok = await engine.decryptFile(target, outputFile, singlePassword, options.compress, keyfileData, recoveryKeyData);
                         }
                     }
                 }

@@ -333,7 +333,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 
 ## Technical Details
 
-### Version 2.6.2 Specifications
+### Version 2.7.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -439,4 +439,4 @@ ncc build crypt_tools.js -o dist
 ---
 
 **Author**: Center For Cyber Intelligence
-**Version**: 2.6.2
+**Version**: 2.7.0

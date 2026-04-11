@@ -1313,7 +1313,8 @@ def test_recursive_encrypt_fail_count(monkeypatch, tmp_path):
 		compress=False,
 		keyfile_data=None,
 		kdf_type=None,
-		iterations=None: False,
+		iterations=None,
+		recovery_key_path=None: False,
 	)
 	main(['--encrypt', '-r', '-f', str(tmp_path), '-p', password])
 
@@ -1324,7 +1325,7 @@ def test_recursive_decrypt_no_ext_file(monkeypatch, tmp_path):
 	monkeypatch.setattr(
 		crypt_tools.CryptoEngine,
 		'decrypt_file',
-		lambda self, i, o, p, compress=False, keyfile_data=None: False,
+		lambda self, i, o, p, compress=False, keyfile_data=None, recovery_key_data=None: False,
 	)
 	main(['--decrypt', '-r', '-f', str(tmp_path), '-p', password])
 
@@ -1352,7 +1353,8 @@ def test_non_recursive_fail_exit(monkeypatch, tmp_path):
 		compress=False,
 		keyfile_data=None,
 		kdf_type=None,
-		iterations=None: False,
+		iterations=None,
+		recovery_key_path=None: False,
 	)
 	with pytest.raises(SystemExit):
 		main(['--encrypt', '-f', str(infile), '-p', password])
