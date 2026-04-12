@@ -481,6 +481,11 @@ ncc build crypt_tools.js -o dist
 
 ## Version History
 
+### 2.9.0
+- Added secure file deletion (`--shred`) implementing DoD 5220.22-M standard (3 passes by default), configurable via `--passes`.
+- Progress bars for each overwrite pass, session timestamps, file info (name + size), and total time display.
+- Cross-platform secure deletion with proper fsync.
+
 ### 2.8.0
 - Added new "Key File Format (--generate-keyfile)" section documenting the text-based key file format.
 - `--generate-keyfile` now creates a URL-safe Base64 text recovery key (not raw binary).
@@ -488,7 +493,7 @@ ncc build crypt_tools.js -o dist
 - Added `--recovery-key` support: generate a recovery key during encryption and use it later to decrypt without the original password.
 - CLI now prints both "Session started" and "Session ended" messages, including failure paths.
 
-### 2.9.0
+### 2.7.0
 - Initial release with AES-256-GCM encryption, PBKDF2/Argon2id key derivation, hidden volumes, and recovery key support.
 
 ---

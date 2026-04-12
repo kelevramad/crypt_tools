@@ -520,6 +520,11 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 
 ## Version History
 
+### 2.9.0
+- Added secure file deletion (`--shred`) implementing DoD 5220.22-M standard (3 passes by default), configurable via `--passes`.
+- Progress bars for each overwrite pass, session timestamps, file info (name + size), and total time display.
+- Cross-platform secure deletion with proper fsync.
+
 ### 2.8.0
 - Added new "Key File Format (--generate-keyfile)" section documenting the text-based key file format.
 - `--generate-keyfile` now creates a URL-safe Base64 text recovery key (not raw binary).
