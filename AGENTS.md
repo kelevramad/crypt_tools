@@ -25,8 +25,8 @@ When the user asks to build a new version, run these commands in sequence:
    - Compare changes with the last version in git to determine what new features/bug fixes to document
    - When updating version history in docs, compare changes with the previous version in git to identify new features and bug fixes before adding entries
    - `PRD.md`: Update version in "Executive Summary" table and add new entry in "Version History"
-   - `README.md`: Update version in "Technical Details" section and add new entry in "Version History"
-   - `README_NODEJS.md`: Update version in "Technical Details" section and add new entry in "Version History"
+   - `README.md`: Update "Technical Details" section (version header) AND add new entry in "Version History"
+   - `README_NODEJS.md`: Update "Technical Details" section (version header) AND add new entry in "Version History"
 
 3. Update `version_info.txt` with new version number
 
