@@ -22,7 +22,9 @@ When the user asks to build a new version, run these commands in sequence:
    - `crypt_tools.js`: Update `Config.VERSION` in the `Config` class
 
 2. Update docs:
-   - `PRD.md`: Update version in "Executive Summary" table
+   - Compare changes with the last version in git to determine what new features/bug fixes to document
+   - When updating version history in docs, compare changes with the previous version in git to identify new features and bug fixes before adding entries
+   - `PRD.md`: Update version in "Executive Summary" table and add new entry in "Version History"
    - `README.md`: Update version in "Technical Details" section and add new entry in "Version History"
    - `README_NODEJS.md`: Update version in "Technical Details" section and add new entry in "Version History"
 
@@ -38,9 +40,15 @@ uvx --with pycryptodome --with tqdm pyinstaller --onefile --icon=favicon.ico --v
 cp ./dist/crypt_tools.exe .
 ```
 
-6. Push and sync to git
+6. Commit and push changes:
+```bash
+git add -A && git commit -m "chore: release v<version>" && git push
+```
 
-7. Create a new GitHub release
+7. Create a new GitHub release:
+```bash
+gh release create v<version> --title "v<version> - <summary>" --notes "<markdown>"
+```
 
 ## Coding Style & Naming Conventions
 Keep changes small and CLI-focused. Python formatting follows Ruff settings in `pyproject.toml`: 100-character line length, single quotes, and tabs for indentation. Python tests and functions use `snake_case`; classes use `PascalCase`. In JavaScript, match the existing file style in `crypt_tools.js` and `tests/*.test.js`; current tests use semicolons, `const`, and 2-space indentation. Name new tests after the behavior they validate, for example `test_hidden_volume_roundtrip` or `hidden volume decrypts with inner password`.

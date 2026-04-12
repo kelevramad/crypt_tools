@@ -334,6 +334,8 @@ npm run test:all  # Both tests and coverage
 
 ## Release Automation
 
+When creating a new release, always compare changes with the previous version in git to identify new features and bug fixes before documenting version history.
+
 When creating GitHub releases, always follow this structure:
 
 ### 1. Title:

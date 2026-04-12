@@ -158,7 +158,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.8.0';
+    static VERSION = '2.9.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -278,6 +278,8 @@ class UIHelpers {
             [
                 ['🛠️', 'Utility'],
                 ['--generate-keyfile [path]', 'Generate a random key file and exit (default: key.txt)'],
+                ['--shred', 'Securely delete file by overwriting before deletion'],
+                ['--passes <count>', 'Number of overwrite passes for --shred (default: 3)'],
                 ['--debug', 'Enable debug mode'],
                 ['--log', 'Enable logging to file'],
                 ['-V, --version', 'Show version'],
@@ -600,19 +602,12 @@ class ProgressBarUtils {
     }
 
     static create(label, total) {
-        const initialTokens = {
-            sizes: '0B/0B',
-            telapsed: '00:00',
-            teta: '00:00',
-            trate: '0B/s'
-        };
         const bar = new ProgressBar(`${label} :percent|:bar| :sizes [:telapsed<:teta, :trate]`, {
             total,
-            width: ProgressBarUtils.calcBarWidth(label, initialTokens),
+            width: 40,
             complete: '▓',
             incomplete: '░',
-            head: '▓',
-            clear: false
+            head: '▓'
         });
         const startTime = Date.now();
         return {
@@ -1366,6 +1361,49 @@ class RecoveryKeyUtils {
         } catch (e) {
             ConsoleLogger.show('error', `Failed to read recovery key: ${e.message}`);
             return null;
+        }
+    }
+}
+
+class SecureDeleteUtils {
+    static shred(filePath, passes = 3) {
+        try {
+            if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+                ConsoleLogger.show('error', `File not found: ${filePath}`);
+                return false;
+            }
+
+            const stats = fs.statSync(filePath);
+            const fileSize = stats.size;
+            if (fileSize === 0) {
+                fs.unlinkSync(filePath);
+                ConsoleLogger.show('success', `Deleted: ${filePath}`);
+                return true;
+            }
+
+            const chunkSize = 64 * 1024;
+
+            for (let passNum = 1; passNum <= passes; passNum++) {
+                const desc = `[🔄] Pass ${passNum}/${passes}: Overwriting with random data`;
+                const progress = ProgressBarUtils.create(desc, fileSize);
+                const fd = fs.openSync(filePath, 'r+');
+                let offset = 0;
+                while (offset < fileSize) {
+                    const randomData = crypto.randomBytes(Math.min(chunkSize, fileSize - offset));
+                    fs.writeSync(fd, randomData, 0, randomData.length, offset);
+                    fs.fsyncSync(fd);
+                    offset += randomData.length;
+                    progress.tick(randomData.length);
+                }
+                fs.closeSync(fd);
+            }
+
+            fs.unlinkSync(filePath);
+            ConsoleLogger.show('success', `Securely deleted: ${filePath} (${passes} passes)`, '🗑 ');
+            return true;
+        } catch (e) {
+            ConsoleLogger.show('error', `Secure delete failed: ${e.message}`);
+            return false;
         }
     }
 }
@@ -2449,6 +2487,8 @@ async function main() {
         .option('-d, --decrypt', 'Decrypt mode', false)
         .option('--inspect', 'Inspect encrypted file metadata', false)
         .option('--generate-keyfile [path]', 'Generate a random key file and exit (default: key.txt)')
+        .option('--shred', 'Securely delete file by overwriting with random data before deletion', false)
+        .option('--passes <count>', 'Number of overwrite passes for --shred (default: 3)', parseInt)
         .option('-t, --text <text>', 'Text to process')
         .option('-f, --file <path>', 'File path, directory, or wildcard pattern (e.g., "*.md", "temp\\*.txt")')
         .option('-o, --output <path>', 'Output file path')
@@ -2504,6 +2544,36 @@ async function main() {
 
     // Show banner first
     Banner.show();
+
+    // Handle secure file deletion
+    if (options.shred) {
+        const startTime = Date.now();
+        const startTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        ConsoleLogger.show('info', `Session started at ${startTimestamp}`, '🕐');
+        ConsoleLogger.show('info', 'Secure File Deletion', '🪚');
+        if (!options.file) {
+            const endTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+            ConsoleLogger.show('info', `Session ended at ${endTimestamp}`, '🏁');
+            ConsoleLogger.show('error', '--shred requires --file');
+            process.exit(1);
+        }
+        const filePath = path.resolve(options.file);
+        if (!fs.existsSync(filePath) || !fs.statSync(filePath).isFile()) {
+            const endTimestamp2 = new Date().toISOString().replace('T', ' ').substring(0, 19);
+            ConsoleLogger.show('info', `Session ended at ${endTimestamp2}`, '🏁');
+            ConsoleLogger.show('error', `File not found: ${filePath}`);
+            process.exit(1);
+        }
+        const fileStats = fs.statSync(filePath);
+        const fileSize = ProgressBarUtils.formatSize(fileStats.size);
+        ConsoleLogger.show('info', `Processing file: ${filePath} (${fileSize})`, '📄');
+        const success = SecureDeleteUtils.shred(filePath, options.passes || 3);
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        ConsoleLogger.show('info', `Total time: ${elapsedSec.toFixed(2)}s`, '⏱️');
+        const endTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        ConsoleLogger.show('info', `Session ended at ${endTimestamp}`, '🏁');
+        process.exit(success ? 0 : 1);
+    }
 
     if (options.select && options.text) {
         ConsoleLogger.show('error', '--select cannot be used with --text');

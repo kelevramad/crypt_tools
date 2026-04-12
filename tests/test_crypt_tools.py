@@ -527,6 +527,7 @@ def test_cli_encrypt_text_with_qr(monkeypatch, capsys):
 
 def test_render_qr_code_uses_compact_terminal_blocks(monkeypatch):
 	"""QR rendering should use a compact half-block terminal representation."""
+
 	class DummyQRCode:
 		def __init__(self, border):
 			assert border == 1
@@ -1163,7 +1164,9 @@ def test_cli_text_decrypt_no_password(monkeypatch, capsys):
 	engine = CryptoEngine()
 	enc = engine.encrypt_data(b'hello', password)
 	b64 = base64.b64encode(enc).decode('utf-8')
-	monkeypatch.setattr(crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': password)
+	monkeypatch.setattr(
+		crypt_tools.PasswordUtils, 'prompt_with_strength', lambda prompt='': password
+	)
 	main(['--decrypt', '-t', b64])
 	captured = capsys.readouterr()
 	assert 'Decrypted: hello' in captured.out
@@ -1224,7 +1227,9 @@ def test_cli_inspect_threshold_file(capsys, tmp_path):
 	infile.write_text('threshold secret')
 	encfile = tmp_path / 'threshold.txt.enc'
 
-	assert engine.encrypt_with_threshold(str(infile), str(encfile), ['a', 'b', 'c'], 2, compress=True)
+	assert engine.encrypt_with_threshold(
+		str(infile), str(encfile), ['a', 'b', 'c'], 2, compress=True
+	)
 
 	main(['--inspect', '-f', str(encfile)])
 	captured = capsys.readouterr()
@@ -1658,6 +1663,7 @@ def test_cli_generate_keyfile(tmp_path):
 def test_cli_generate_keyfile_default_name(tmp_path):
 	"""Test that --generate-keyfile without argument uses key.txt as default."""
 	import os
+
 	original_cwd = os.getcwd()
 	try:
 		os.chdir(tmp_path)
@@ -1670,6 +1676,64 @@ def test_cli_generate_keyfile_default_name(tmp_path):
 		assert len(content) == 22
 	finally:
 		os.chdir(original_cwd)
+
+
+def test_shred_file(tmp_path):
+	"""Test secure file deletion with --shred."""
+	test_file = tmp_path / 'sensitive.txt'
+	test_file.write_bytes(os.urandom(1024))
+	assert test_file.exists()
+
+	result = crypt_tools.SecureDeleteUtils.shred(str(test_file), passes=3)
+	assert result is True
+	assert not test_file.exists()
+
+
+def test_shred_empty_file(tmp_path):
+	"""Test secure deletion of empty file."""
+	empty_file = tmp_path / 'empty.txt'
+	empty_file.write_text('')
+	assert empty_file.exists()
+
+	result = crypt_tools.SecureDeleteUtils.shred(str(empty_file), passes=1)
+	assert result is True
+	assert not empty_file.exists()
+
+
+def test_shred_nonexistent_file(tmp_path):
+	"""Test that shred fails gracefully for missing file."""
+	nonexistent = tmp_path / 'does_not_exist.txt'
+	result = crypt_tools.SecureDeleteUtils.shred(str(nonexistent), passes=1)
+	assert result is False
+
+
+def test_cli_shred(tmp_path):
+	"""Test CLI --shred command."""
+	test_file = tmp_path / 'to_delete.txt'
+	test_file.write_bytes(os.urandom(512))
+
+	with pytest.raises(SystemExit):
+		main(['--shred', '-f', str(test_file)])
+
+	assert not test_file.exists()
+
+
+def test_cli_shred_with_passes(tmp_path):
+	"""Test CLI --shred with custom --passes."""
+	test_file = tmp_path / 'to_delete_2.txt'
+	test_file.write_bytes(os.urandom(256))
+
+	with pytest.raises(SystemExit):
+		main(['--shred', '-f', str(test_file), '--passes', '1'])
+
+	assert not test_file.exists()
+
+
+def test_cli_shred_requires_file(tmp_path):
+	"""Test that --shred requires --file argument."""
+	with pytest.raises(SystemExit) as exc_info:
+		main(['--shred'])
+	assert exc_info.value.code == 1
 
 
 def test_cli_encrypt_with_keyfile(tmp_path):

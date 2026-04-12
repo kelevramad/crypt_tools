@@ -381,7 +381,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.8.0 Specifications
+### Version 2.9.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -393,6 +393,7 @@ This tool improves upon older implementations by:
 8.  **Header Format**: New encrypted files include a fixed `CT02` header with flags, KDF ID, and KDF parameters.
 9.  **Recovery-key support** (optional): files can include a recovery blob that stores the derived encryption key encrypted under a separate 32-byte recovery key.
 10.  **Hidden-volume containers** (optional): Two `CT02` blobs back-to-back, then a `CTHV` magic (4 bytes) plus 64-bit big-endian outer blob length (8 bytes). Same KDF/compression/keyfile options apply to both inner encrypts when creating a container.
+11.  **Secure file deletion** (`--shred`): Overwrites files with random data before deletion using DoD 5220.22-M standard (3 passes by default), configurable via `--passes`.
 
 ### File Formats
 
@@ -532,4 +533,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.8.0
+**Version**: 2.9.0

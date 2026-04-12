@@ -364,7 +364,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 
 ## Technical Details
 
-### Version 2.8.0 Specifications
+### Version 2.9.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -376,6 +376,7 @@ This tool improves upon older implementations by:
 8.  **Header Format**: New encrypted files include a fixed `CT02` header with flags, KDF ID, and KDF parameters.
 9.  **Recovery-key support** (optional): files can include a recovery blob that stores the derived encryption key encrypted under a separate 32-byte recovery key.
 10.  **Hidden-volume containers** (optional): Two `CT02` blobs, then `CTHV` + 64-bit big-endian outer length; same options apply to both layers when creating a container.
+11.  **Secure file deletion** (`--shred`): Overwrites files with random data before deletion using DoD 5220.22-M standard (3 passes by default), configurable via `--passes`.
 
 ### File Formats
 
@@ -487,10 +488,10 @@ ncc build crypt_tools.js -o dist
 - Added `--recovery-key` support: generate a recovery key during encryption and use it later to decrypt without the original password.
 - CLI now prints both "Session started" and "Session ended" messages, including failure paths.
 
-### 2.7.0
+### 2.9.0
 - Initial release with AES-256-GCM encryption, PBKDF2/Argon2id key derivation, hidden volumes, and recovery key support.
 
 ---
 
 **Author**: Center For Cyber Intelligence
-**Version**: 2.8.0
+**Version**: 2.9.0

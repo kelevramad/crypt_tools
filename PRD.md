@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.8.0 |
+| **Version** | 2.9.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -356,6 +356,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.9.0 | 2026-04-12 | Added secure file deletion (`--shred`) implementing DoD 5220.22-M standard (3 passes by default), `--passes` parameter for custom pass count, progress bars for each overwrite pass, session timestamps and file info display |
 | 2.7.0 | 2026-04-11 | Added recovery key generation (`--recovery-key`) for emergency access without password, recovery key stored in encrypted file header as AES-GCM encrypted blob, inspect mode shows recovery key status |
 | 2.6.2 | 2026-04-10 | Fixed recursive decrypt output filename to match non-recursive behavior (files like `test.txt.enc` now decrypt to `test.txt` instead of `test.txt.dec`), fixed missing `UIHelpers.file_selector` reference in Python CLI |
 | 2.6.1 | 2026-04-10 | Added tests for default keyfile name (`key.txt`) when `--generate-keyfile` is called without a path, ensuring consistent behavior and documentation alignment |

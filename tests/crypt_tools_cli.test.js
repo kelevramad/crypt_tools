@@ -852,6 +852,47 @@ test('inspect shows argon2 kdf', () => {
   }
 });
 
+test('shred securely deletes file', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+
+  try {
+    const testFile = path.join(tmpDir, 'sensitive.txt');
+    fs.writeFileSync(testFile, Buffer.alloc(1024));
+
+    assert.ok(fs.existsSync(testFile), 'file should exist before shred');
+
+    const result = runCLI(['--shred', '-f', testFile], { cwd: tmpDir });
+    assert.strictEqual(result.code, 0, 'shred should succeed: ' + result.stderr);
+
+    assert.ok(!fs.existsSync(testFile), 'file should be deleted after shred');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('shred with custom passes', () => {
+  const tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-test-'));
+
+  try {
+    const testFile = path.join(tmpDir, 'to_delete.txt');
+    fs.writeFileSync(testFile, Buffer.alloc(256));
+
+    assert.ok(fs.existsSync(testFile), 'file should exist before shred');
+
+    const result = runCLI(['--shred', '-f', testFile, '--passes', '1'], { cwd: tmpDir });
+    assert.strictEqual(result.code, 0, 'shred should succeed: ' + result.stderr);
+
+    assert.ok(!fs.existsSync(testFile), 'file should be deleted after shred with 1 pass');
+  } finally {
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test('shred requires --file argument', () => {
+  const result = runCLI(['--shred']);
+  assert.strictEqual(result.code, 1, 'shred without file should fail');
+});
+
 
 
 

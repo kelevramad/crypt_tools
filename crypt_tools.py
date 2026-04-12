@@ -168,7 +168,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.8.0'
+	VERSION = '2.9.0'
 
 	# File format
 	MAGIC = b'CT02'
@@ -1169,6 +1169,45 @@ class RecoveryKeyUtils:
 		except Exception as e:
 			ConsoleLogger.show('error', f'Failed to read recovery key: {e}')
 			return None
+
+
+class SecureDeleteUtils:
+	@staticmethod
+	def shred(path: str, passes: int = 3) -> bool:
+		try:
+			if not os.path.isfile(path):
+				ConsoleLogger.show('error', f'File not found: {path}')
+				return False
+
+			file_size = os.path.getsize(path)
+			if file_size == 0:
+				os.remove(path)
+				ConsoleLogger.show('success', f'Deleted: {path}')
+				return True
+
+			chunk_size = 64 * 1024
+
+			for pass_num in range(1, passes + 1):
+				desc = f'[🔄] Pass {pass_num}/{passes}: Overwriting with random data'
+				with tqdm(total=file_size, unit='B', unit_scale=True, desc=desc) as pbar:
+					with open(path, 'rb+') as f:
+						offset = 0
+						while offset < file_size:
+							random_data = os.urandom(min(chunk_size, file_size - offset))
+							f.seek(offset)
+							f.write(random_data)
+							f.flush()
+							os.fsync(f.fileno())
+							offset += len(random_data)
+							pbar.update(len(random_data))
+
+			os.remove(path)
+			ConsoleLogger.show('success', f'Securely deleted: {path} ({passes} passes)', icon='🗑 ')
+			return True
+
+		except Exception as e:
+			ConsoleLogger.show('error', f'Secure delete failed: {e}')
+			return False
 
 
 # =========================
@@ -2624,7 +2663,9 @@ def parse_args(argv=None):
 			'  - Use --qr with text encryption to print the encrypted Base64 payload as a QR code.\n'
 			'  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.\n'
 			'    This is not identical to VeraCrypt: the footer and extra length are visible forensically;\n'
-			'    deniability is “wrong password opens decoy,” not “file looks like a single ciphertext only.”\n\n'
+			'    deniability is "wrong password opens decoy," not "file looks like a single ciphertext only."\n'
+			'  - Secure deletion (--shred): securely delete files by overwriting with random data before removal.\n'
+			'    Uses DoD 5220.22-M standard (3 passes by default).\n\n'
 			f'{UIHelpers.heading("🌍", "Environment Variables")}\n'
 			'  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,\n'
 			'  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,\n'
@@ -2649,6 +2690,17 @@ def parse_args(argv=None):
 		nargs='?',
 		const='key.txt',
 		help='Generate a random key file and exit (default: key.txt)',
+	)
+	utility_group.add_argument(
+		'--shred',
+		action='store_true',
+		help='Securely delete file by overwriting with random data before deletion',
+	)
+	utility_group.add_argument(
+		'--passes',
+		type=int,
+		default=3,
+		help='Number of overwrite passes for --shred (default: 3)',
 	)
 	utility_group.add_argument('--debug', action='store_true', help='Enable debug mode')
 	utility_group.add_argument('--log', action='store_true', help='Enable logging to file')
@@ -2801,6 +2853,33 @@ def main(argv=None):
 			sys.exit(0)
 		else:
 			sys.exit(1)
+
+	# Handle secure file deletion
+	if args.shred:
+		start_time = time.time()
+		start_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+		ConsoleLogger.show('info', f'Session started at {start_timestamp}', icon='🕐')
+		ConsoleLogger.show('info', 'Secure File Deletion', icon='🪚')
+		if not args.file:
+			end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+			ConsoleLogger.show('info', f'Session ended at {end_timestamp}', icon='🏁')
+			ConsoleLogger.show('error', '--shred requires --file')
+			sys.exit(1)
+		file_path = os.path.abspath(args.file)
+		if not os.path.isfile(file_path):
+			end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+			ConsoleLogger.show('info', f'Session ended at {end_timestamp}', icon='🏁')
+			ConsoleLogger.show('error', f'File not found: {file_path}')
+			sys.exit(1)
+		file_size = os.path.getsize(file_path)
+		formatted_size = engine._format_size(file_size)
+		ConsoleLogger.show('info', f'Processing file: {file_path} ({formatted_size})', icon='📄')
+		success = SecureDeleteUtils.shred(file_path, args.passes)
+		elapsed_time = time.time() - start_time
+		ConsoleLogger.show('info', f'Total time: {elapsed_time:.2f}s', icon='⏱️')
+		end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+		ConsoleLogger.show('info', f'Session ended at {end_timestamp}', icon='🏁')
+		sys.exit(0 if success else 1)
 
 	if args.select and args.text:
 		ConsoleLogger.show('error', '--select cannot be used with --text')
