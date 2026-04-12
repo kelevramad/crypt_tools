@@ -23,6 +23,7 @@
 - **Interactive File Selection**: Launch a terminal file picker with `--select` to browse and choose a file or directory.
 - **QR Code Output**: Render encrypted text as a terminal QR code with `--qr` for air-gapped transfer.
 - **Hidden volumes (containers)**: Optional two-password file container—decoy content with the outer password, sensitive content with the hidden password; two `CT02` blobs plus a `CTHV` footer (see limitations in [README.md](README.md) hidden-volume section).
+- **Recovery Key Support**: Optionally generate a separate recovery key file during encryption and use it later to decrypt without the original password.
 
 ## Installation
 
@@ -224,7 +225,7 @@ node crypt_tools.js --decrypt --select -f .\\documents -p "your_password"
 ### Key File Support
 Generate and use key files for two-factor encryption (password + key file):
 ```bash
-# Generate a random 32-byte key file (uses default name: key.txt)
+# Generate a key file (uses default name: key.txt)
 node crypt_tools.js --generate-keyfile
 
 # Generate a key file with custom name
@@ -251,6 +252,28 @@ node crypt_tools.js --encrypt -f document.txt -p "your_password" --kdf argon2 --
 # Decrypt file encrypted with Argon2 (auto-detected from file header)
 node crypt_tools.js --decrypt -f document.enc -p "your_password"
 ```
+
+### Recovery Key Support
+Generate a recovery key during encryption, then use that recovery key later for emergency decryption.
+```bash
+# Encrypt and generate recovery_key.txt automatically
+node crypt_tools.js --encrypt -f document.txt -p "your_password" --recovery-key
+
+# Encrypt and write the recovery key to a custom path
+node crypt_tools.js --encrypt -f document.txt -p "your_password" --recovery-key my_recovery.txt
+
+# Decrypt with the recovery key file
+node crypt_tools.js --decrypt -f document.enc --recovery-key recovery_key.txt
+
+# If both are supplied, the CLI tries the recovery key first and falls back to the password
+node crypt_tools.js --decrypt -f document.enc -p "your_password" --recovery-key recovery_key.txt
+```
+
+Notes:
+- `--recovery-key` generates a MEGA-style URL-safe Base64 recovery key file during encryption.
+- The encrypted file stores an encrypted recovery blob inside the `CT02` payload; the recovery key itself is not embedded in the file.
+- `--inspect` reports whether recovery-key support is enabled for a file.
+- `--recovery-key` cannot be combined with `--hidden-vol`.
 
 ### Threshold passwords
 
@@ -280,7 +303,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 | `--encrypt` | `-e` | Encrypt mode (default) |
 | `--decrypt` | `-d` | Decrypt mode |
 | `--inspect` | — | Inspect encrypted file metadata |
-| `--generate-keyfile` | — | Generate a MEGA-style textual recovery key (default: `key.txt`) |
+| `--generate-keyfile` | — | Generate a MEGA-style textual key file (default: `key.txt`) |
 | `--text` | `-t` | Text to process |
 | `--file` | `-f` | Input file path or wildcard pattern |
 | `--output` | `-o` | Output file path |
@@ -288,6 +311,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 | `--select` | — | Browse and choose a file or directory interactively |
 | `--password` | `-p` | Password (optional, will prompt if missing) |
 | `--keyfile` | — | Key file path for encryption/decryption |
+| `--recovery-key` | — | Generate/use recovery key file (default: `recovery_key.txt`) |
 | `--compress` | `-c` | Enable compression |
 | `--recursive` | `-r` | Recursively process directories |
 | `--kdf` | — | Key derivation function: `pbkdf2` (default) or `argon2` |
@@ -320,10 +344,17 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 - `--output` is only honored when processing a single file (patterns/multiple files ignore custom output)
 
 ### Recovery Keys
-- `--generate-keyfile` now creates a text recovery key instead of a raw binary blob.
-- The generated format is a URL-safe Base64 string similar to a MEGA recovery key.
+- `--recovery-key` creates a separate MEGA-style URL-safe Base64 recovery key file during encryption.
+- Decryption can use the recovery key file without the original password.
+- If both `-p/--password` and `--recovery-key` are supplied for decrypt, the CLI tries the recovery key first and falls back to password-based decryption.
+- `--inspect` shows `Recovery key: enabled` when a file contains a recovery blob.
+- `--recovery-key` cannot be used with `--hidden-vol`.
+
+### Key File Format (--generate-keyfile)
+- `--generate-keyfile` now creates a text recovery key, not a raw binary blob.
+- The generated format is a URL-safe Base64 string similar to MEGA recovery keys.
 - `--keyfile` accepts both the new textual recovery-key format and older binary key files for backward compatibility.
-- If a session starts, the CLI now prints both `Session started` and `Session ended`, including failure paths.
+- If a session starts, the CLI now prints both Session started and Session ended, including failure paths.
 
 ### Format Compatibility
 - New encrypted files use the versioned `CT02` format.
@@ -343,7 +374,8 @@ This tool improves upon older implementations by:
 6.  **PBKDF2 Iterations**: **100,000** iterations for key derivation (default).
 7.  **Argon2id Support**: Modern KDF with **3** iterations, **64 MB** memory, and **4** parallelism (configurable via `--iterations`).
 8.  **Header Format**: New encrypted files include a fixed `CT02` header with flags, KDF ID, and KDF parameters.
-9.  **Hidden-volume containers** (optional): Two `CT02` blobs, then `CTHV` + 64-bit big-endian outer length; same options apply to both layers when creating a container.
+9.  **Recovery-key support** (optional): files can include a recovery blob that stores the derived encryption key encrypted under a separate 32-byte recovery key.
+10.  **Hidden-volume containers** (optional): Two `CT02` blobs, then `CTHV` + 64-bit big-endian outer length; same options apply to both layers when creating a container.
 
 ### File Formats
 
@@ -352,12 +384,19 @@ This tool improves upon older implementations by:
 [Magic "CT02" (4 bytes)] + [Version (1 byte)] + [Flags (1 byte)] + [KDF ID (1 byte)] + [Reserved (1 byte)] +
 [Salt Length (1 byte)] + [Nonce Length (1 byte)] + [Tag Length (1 byte)] + [KDF Param Length (1 byte)] +
 [KDF Params (4 bytes for PBKDF2 iterations)] + [Salt (16 bytes)] + [Nonce (12 bytes)] +
+[Recovery Blob Length (2 bytes, optional)] + [Recovery Blob (optional)] +
 [Encrypted Content (Chunks)] + [GCM Tag (16 bytes)]
 ```
 
 **In-Memory Data Format (`CT02`)**:
 ```
-[Header] + [Salt (16 bytes)] + [Nonce (12 bytes)] + [Ciphertext] + [GCM Tag (16 bytes)]
+[Header] + [Salt (16 bytes)] + [Nonce (12 bytes)] + [Recovery Blob Length (2 bytes, optional)] +
+[Recovery Blob (optional)] + [Ciphertext] + [GCM Tag (16 bytes)]
+```
+
+**Recovery Blob Format (when recovery is enabled)**:
+```
+[Recovery Nonce (12 bytes)] + [Encrypted Derived Key (32 bytes)] + [Recovery Tag (16 bytes)]
 ```
 
 **Legacy File Format (still readable)**:
@@ -379,6 +418,7 @@ This tool improves upon older implementations by:
 |-------|-------------|
 | `GaloisField` | GF(2^8) arithmetic for Shamir's Secret Sharing (Python edition only; Node.js uses inline static methods) |
 | `Config` | Stores constants like key size, salt, nonce, tag sizes, and PBKDF2 iterations |
+| `RecoveryKeyUtils` | Recovery key generation, file I/O, and wrapping/unwrapping the derived key |
 | `CryptoEngine` | Core of the application. Manages key derivation, encryption, and decryption |
 | `Banner` | Displays random ASCII art banners on startup |
 | `ConsoleLogger` | Unified console and file logging with emojis and colors |
