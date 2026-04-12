@@ -381,7 +381,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.7.0 Specifications
+### Version 2.8.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -517,5 +517,19 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 
 ---
 
+## Version History
+
+### 2.8.0
+- Added new "Key File Format (--generate-keyfile)" section documenting the text-based key file format.
+- `--generate-keyfile` now creates a URL-safe Base64 text recovery key (not raw binary).
+- `--keyfile` accepts both new textual format and older binary key files for backward compatibility.
+- Added `--recovery-key` support: generate a recovery key during encryption and use it later to decrypt without the original password.
+- CLI now prints both "Session started" and "Session ended" messages, including failure paths.
+
+### 2.7.0
+- Initial release with AES-256-GCM encryption, PBKDF2/Argon2id key derivation, hidden volumes, and recovery key support.
+
+---
+
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.7.0
+**Version**: 2.8.0

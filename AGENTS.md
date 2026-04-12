@@ -23,8 +23,8 @@ When the user asks to build a new version, run these commands in sequence:
 
 2. Update docs:
    - `PRD.md`: Update version in "Executive Summary" table
-   - `README.md`: Update version in "Technical Details" section
-   - `README_NODEJS.md`: Update version in "Technical Details" section
+   - `README.md`: Update version in "Technical Details" section and add new entry in "Version History"
+   - `README_NODEJS.md`: Update version in "Technical Details" section and add new entry in "Version History"
 
 3. Update `version_info.txt` with new version number
 

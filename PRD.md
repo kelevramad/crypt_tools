@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.7.0 |
+| **Version** | 2.8.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
