@@ -260,6 +260,7 @@ class UIHelpers {
                 ['--keyfile <path>', 'Key file path for encryption/decryption'],
                 ['--password-outer <password>', 'Decoy password for --hidden-vol'],
                 ['--password-hidden <password>', 'Hidden password for --hidden-vol / --hidden'],
+                ['--recovery-key [path]', 'Generate/use recovery key file (default: recovery_key.txt)'],
             ],
             [
                 ['📦', 'File & Container Behavior'],
@@ -304,10 +305,15 @@ class UIHelpers {
             '  - Wildcards are supported; with -r, patterns like .\\temp\\*.txt are expanded recursively',
             '    (equivalent to .\\temp\\**\\*.txt).',
             '  - Password prompts show a live strength indicator.',
-            '  - Key file support: combine password + keyfile for two-factor encryption.',
+            '  - Key file support: Use --keyfile to encrypt/decrypt with a key file.',
+            '    Combining password + keyfile provides two-factor encryption.',
             '  - Use --select to browse for a file or directory in an interactive terminal UI.',
             '  - Use --qr with text encryption to print the encrypted Base64 payload as a QR code.',
-            '  - Hidden volumes use two CT02 blobs plus a visible CTHV footer.',
+            '  - Hidden volumes (--hidden-vol / -d --hidden): two CT02 blobs plus a CTHV footer.',
+            '    This is not identical to VeraCrypt: the footer and extra length are visible forensically;',
+            '    deniability is "wrong password opens decoy," not "file looks like a single ciphertext only."',
+            '  - Secure deletion (--shred): securely delete files by overwriting with random data before removal.',
+            '    Uses DoD 5220.22-M standard (3 passes by default).',
             '',
             UIHelpers.heading('🌍', 'Environment Variables'),
             '  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,',
@@ -1215,8 +1221,9 @@ class KeyFileUtils {
             const key = crypto.randomBytes(keySize);
             const recoveryKey = key.toString('base64url');
             fs.writeFileSync(outputPath, `${recoveryKey}\n`, 'utf8');
-            ConsoleLogger.show('success', `Recovery key file generated: ${outputPath}`);
+            ConsoleLogger.show('success', `Key file generated: ${outputPath}`, '🔑');
             ConsoleLogger.show('info', `Key size: ${keySize} bytes (${keySize * 8} bits)`);
+            ConsoleLogger.show('warning', 'Store key file securely - it can encrypt your files without a password!', '🔐');
             return true;
         } catch (err) {
             ConsoleLogger.show('error', `Failed to generate key file: ${err.message}`);
@@ -2534,12 +2541,16 @@ async function main() {
 
     // Handle key file generation
     if (options.generateKeyfile) {
+        const startTime = Date.now();
+        const startTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        ConsoleLogger.show('info', `Session started at ${startTimestamp}`, '🕐');
         const keyfilePath = options.generateKeyfile === true ? 'key.txt' : options.generateKeyfile;
-        if (KeyFileUtils.generate(keyfilePath)) {
-            process.exit(0);
-        } else {
-            process.exit(1);
-        }
+        const success = KeyFileUtils.generate(keyfilePath);
+        const elapsedSec = (Date.now() - startTime) / 1000;
+        ConsoleLogger.show('info', `Total time: ${elapsedSec.toFixed(2)}s`, '⏱️');
+        const endTimestamp = new Date().toISOString().replace('T', ' ').substring(0, 19);
+        ConsoleLogger.show('info', `Session ended at ${endTimestamp}`, '🏁');
+        process.exit(success ? 0 : 1);
     }
 
     // Show banner first

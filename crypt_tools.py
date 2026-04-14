@@ -1028,8 +1028,13 @@ class KeyFileUtils:
 			recovery_key = base64.urlsafe_b64encode(key).decode('ascii').rstrip('=')
 			with open(path, 'w', encoding='utf-8', newline='\n') as f:
 				f.write(f'{recovery_key}\n')
-			ConsoleLogger.show('success', f'Recovery key file generated: {path}')
+			ConsoleLogger.show('success', f'Key file generated: {path}', icon='🔑')
 			ConsoleLogger.show('info', f'Key size: {key_size} bytes ({key_size * 8} bits)')
+			ConsoleLogger.show(
+				'warning',
+				'Store key file securely - it can encrypt your files without a password!',
+				icon='🔐',
+			)
 			return True
 		except Exception as e:
 			ConsoleLogger.show('error', f'Failed to generate key file: {e}')
@@ -2683,31 +2688,6 @@ def parse_args(argv=None):
 		formatter_class=argparse.RawTextHelpFormatter,
 		add_help=False,
 	)
-	utility_group = parser.add_argument_group(UIHelpers.heading('🛠️', 'Utility'))
-	utility_group.add_argument(
-		'--generate-keyfile',
-		dest='generate_keyfile',
-		nargs='?',
-		const='key.txt',
-		help='Generate a random key file and exit (default: key.txt)',
-	)
-	utility_group.add_argument(
-		'--shred',
-		action='store_true',
-		help='Securely delete file by overwriting with random data before deletion',
-	)
-	utility_group.add_argument(
-		'--passes',
-		type=int,
-		default=3,
-		help='Number of overwrite passes for --shred (default: 3)',
-	)
-	utility_group.add_argument('--debug', action='store_true', help='Enable debug mode')
-	utility_group.add_argument('--log', action='store_true', help='Enable logging to file')
-	utility_group.add_argument('-v', '--version', action='version', version=Config.VERSION)
-	utility_group.add_argument(
-		'-h', '--help', action='help', help='Show this help message and exit'
-	)
 
 	mode_group = parser.add_argument_group(
 		UIHelpers.heading('🎯', 'Modes')
@@ -2776,6 +2756,12 @@ def parse_args(argv=None):
 	file_group = parser.add_argument_group(UIHelpers.heading('📦', 'File & Container Behavior'))
 	file_group.add_argument('-c', '--compress', action='store_true', help='Enable compression')
 	file_group.add_argument(
+		'-r',
+		'--recursive',
+		action='store_true',
+		help='Recursively process directories or wildcard patterns (uses ** for subfolders)',
+	)
+	file_group.add_argument(
 		'--hidden-vol',
 		action='store_true',
 		help='Encrypt decoy (-f) and hidden (--hidden-file) into one container (single file only)',
@@ -2788,12 +2774,6 @@ def parse_args(argv=None):
 		'--hidden',
 		action='store_true',
 		help='With -d -f, decrypt inner/hidden volume (password is the hidden password)',
-	)
-	file_group.add_argument(
-		'-r',
-		'--recursive',
-		action='store_true',
-		help='Recursively process directories or wildcard patterns (uses ** for subfolders)',
 	)
 
 	crypto_group = parser.add_argument_group(UIHelpers.heading('🧬', 'Crypto Tuning'))
@@ -2812,6 +2792,32 @@ def parse_args(argv=None):
 		'--qr',
 		action='store_true',
 		help='Render encrypted text output as a QR code (text encrypt mode only)',
+	)
+
+	utility_group = parser.add_argument_group(UIHelpers.heading('🛠️', 'Utility'))
+	utility_group.add_argument(
+		'--generate-keyfile',
+		dest='generate_keyfile',
+		nargs='?',
+		const='key.txt',
+		help='Generate a random key file and exit (default: key.txt)',
+	)
+	utility_group.add_argument(
+		'--shred',
+		action='store_true',
+		help='Securely delete file by overwriting with random data before deletion',
+	)
+	utility_group.add_argument(
+		'--passes',
+		type=int,
+		default=3,
+		help='Number of overwrite passes for --shred (default: 3)',
+	)
+	utility_group.add_argument('--debug', action='store_true', help='Enable debug mode')
+	utility_group.add_argument('--log', action='store_true', help='Enable logging to file')
+	utility_group.add_argument('-v', '--version', action='version', version=Config.VERSION)
+	utility_group.add_argument(
+		'-h', '--help', action='help', help='Show this help message and exit'
 	)
 
 	return parser.parse_args(argv)
@@ -2849,10 +2855,15 @@ def main(argv=None):
 
 	# Handle key file generation
 	if args.generate_keyfile:
-		if KeyFileUtils.generate(args.generate_keyfile):
-			sys.exit(0)
-		else:
-			sys.exit(1)
+		start_time = time.time()
+		start_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+		ConsoleLogger.show('info', f'Session started at {start_timestamp}', icon='🕐')
+		success = KeyFileUtils.generate(args.generate_keyfile)
+		elapsed_time = time.time() - start_time
+		ConsoleLogger.show('info', f'Total time: {elapsed_time:.2f}s', icon='⏱️')
+		end_timestamp = time.strftime('%Y-%m-%d %H:%M:%S')
+		ConsoleLogger.show('info', f'Session ended at {end_timestamp}', icon='🏁')
+		sys.exit(0 if success else 1)
 
 	# Handle secure file deletion
 	if args.shred:

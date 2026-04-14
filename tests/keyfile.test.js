@@ -37,7 +37,7 @@ test('generates key file', () => {
     const keyPath = path.join(tmp, 'my.key');
     const res = runCLI(['--generate-keyfile', keyPath]);
     assert.equal(res.code, 0);
-    assert.match(res.stdout, /Recovery key file generated/);
+    assert.match(res.stdout, /Key file generated/);
     assert.ok(fs.existsSync(keyPath));
     const recoveryKey = fs.readFileSync(keyPath, 'utf8').trim();
     assert.match(recoveryKey, /^[A-Za-z0-9_-]+$/);
