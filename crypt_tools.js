@@ -158,7 +158,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.10.0';
+    static VERSION = '2.10.1';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -1845,6 +1845,7 @@ class CryptoEngine {
                 password,
                 compress,
                 keyfileData,
+                null,
                 info.hiddenStart,
                 info.fileSize - Config.CONTAINER_FOOTER_SIZE
             );
@@ -1855,6 +1856,7 @@ class CryptoEngine {
             password,
             compress,
             keyfileData,
+            null,
             0,
             info.outerTotalLen
         );

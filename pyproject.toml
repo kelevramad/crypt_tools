@@ -1,6 +1,6 @@
 [project]
 name = "crypt-tools"
-version = "2.10.0"
+version = "2.10.1"
 description = "Crypt Tools"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -40,4 +40,5 @@ pythonpath = "."
 check = "ruff check ."
 diff = "ruff format --diff ."
 format = "ruff format ."
+smoke = "pytest -m smoke -q"
 test = "pytest -v"

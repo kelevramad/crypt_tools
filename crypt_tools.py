@@ -171,7 +171,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.10.0'
+	VERSION = '2.10.1'
 
 	# File format
 	MAGIC = b'CT02'

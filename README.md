@@ -381,7 +381,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.10.0 Specifications
+### Version 2.10.1 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -475,6 +475,11 @@ Run tests using:
 uv run pytest
 ```
 
+Run the quick smoke test using:
+```bash
+uv run pytest -m smoke -q
+```
+
 ## Building Executable
 
 You can compile `crypt_tools.py` into a standalone executable file (.exe) using **PyInstaller**. This allows you to run the tool on systems without Python installed.
@@ -520,6 +525,11 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 
 ## Version History
 
+### 2.10.1
+- Fixed Node.js hidden-container decryption so the outer and inner `CT02` blobs are decrypted using the correct byte ranges.
+- Added a focused Python smoke test for CLI text encryption/decryption roundtrip.
+- Added a `smoke` task for fast local release checks.
+
 ### 2.10.0
 - Config-key cleanup: removed deprecated aliases (`compression`, `default_*`, `log_enabled`, `debug_enabled`, `logging`) and corresponding env-vars (`CRYPT_TOOLS_COMPRESSION`, `CRYPT_TOOLS_LOG_ENABLED`, `CRYPT_TOOLS_DEBUG_ENABLED`); use the canonical keys instead (`compress`, `kdf`, `iterations`, `log`, `debug`, `password`, `password_outer`, `password_hidden`, `keyfile`, `threshold`).
 - Type-checking pass: full pyright clean across `crypt_tools.py`; tightened `Optional` annotations and guarded optional dependencies (`argon2`, `qrcode`, `blessed`).
@@ -544,4 +554,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.10.0
+**Version**: 2.10.1

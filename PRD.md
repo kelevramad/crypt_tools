@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.10.0 |
+| **Version** | 2.10.1 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -356,6 +356,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.10.1 | 2026-05-12 | Fixed Node.js hidden-container decrypt by passing byte-range offsets to the correct `decryptFile` parameters; added dedicated Python and Node smoke tests plus `smoke` commands for fast CLI roundtrip verification |
 | 2.10.0 | 2026-05-11 | Config-key cleanup: removed deprecated aliases (`compression`, `default_*`, `log_enabled`, `debug_enabled`, `logging`) and corresponding env-vars; only canonical keys remain. Full pyright type-checker pass on `crypt_tools.py`, removed dead locals, replaced bare `except:` with `except OSError:`; added `pyright` to dev dependencies |
 | 2.9.0 | 2026-04-12 | Added secure file deletion (`--shred`) implementing DoD 5220.22-M standard (3 passes by default), `--passes` parameter for custom pass count, progress bars for each overwrite pass, session timestamps and file info display |
 | 2.7.0 | 2026-04-11 | Added recovery key generation (`--recovery-key`) for emergency access without password, recovery key stored in encrypted file header as AES-GCM encrypted blob, inspect mode shows recovery key status |

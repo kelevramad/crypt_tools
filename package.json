@@ -1,6 +1,6 @@
 {
   "name": "crypt-tools",
-  "version": "2.6.0",
+  "version": "2.10.1",
   "description": "Cryptographic Tool for File and Text Encryption/Decryption (AES-GCM Edition)",
   "main": "crypt_tools.js",
   "bin": {
@@ -8,6 +8,7 @@
   },
   "scripts": {
     "start": "node crypt_tools.js",
+    "smoke": "node --test --test-reporter spec tests/smoke.test.js",
     "test": "node --test --test-reporter spec tests/*.test.js",
     "coverage": "c8 -r text -r html npm test",
     "test:all": "npm test && npm run coverage"
