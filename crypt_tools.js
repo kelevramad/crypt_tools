@@ -158,7 +158,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.9.0';
+    static VERSION = '2.10.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -316,19 +316,15 @@ class UIHelpers {
             '    Uses DoD 5220.22-M standard (3 passes by default).',
             '',
             UIHelpers.heading('🌍', 'Environment Variables'),
-            '  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,',
-            '  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,',
-            '  CRYPT_TOOLS_LOG_ENABLED, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_DEBUG_ENABLED,',
-            '  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD,',
-            '  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN',
+            '  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,',
+            '  CRYPT_TOOLS_LOG, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_PASSWORD,',
+            '  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN,',
+            '  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD',
             '',
             UIHelpers.heading('⚙️', 'Config Keys'),
-            '  compress, compression, default_compression, kdf, default_kdf,',
-            '  iterations, default_iterations, log, logging, log_enabled,',
-            '  debug, debug_enabled, password, default_password,',
-            '  password_outer, default_password_outer,',
-            '  password_hidden, default_password_hidden,',
-            '  keyfile, default_keyfile, threshold',
+            '  compress, kdf, iterations, log, debug,',
+            '  password, password_outer, password_hidden,',
+            '  keyfile, threshold',
             '',
         ].join('\n');
     }
@@ -647,37 +643,23 @@ class ConfigParser {
 
     static KEY_ALIASES = {
         compress: 'compress',
-        compression: 'compress',
-        default_compression: 'compress',
         kdf: 'kdf',
-        default_kdf: 'kdf',
         iterations: 'iterations',
-        default_iterations: 'iterations',
         log: 'log',
-        logging: 'log',
-        log_enabled: 'log',
         debug: 'debug',
-        debug_enabled: 'debug',
         password: 'password',
-        default_password: 'password',
         password_outer: 'passwordOuter',
-        default_password_outer: 'passwordOuter',
         password_hidden: 'passwordHidden',
-        default_password_hidden: 'passwordHidden',
         keyfile: 'keyfile',
-        default_keyfile: 'keyfile',
         threshold: 'threshold',
     };
 
     static ENV_KEY_ALIASES = {
         CRYPT_TOOLS_COMPRESS: 'compress',
-        CRYPT_TOOLS_COMPRESSION: 'compress',
         CRYPT_TOOLS_KDF: 'kdf',
         CRYPT_TOOLS_ITERATIONS: 'iterations',
         CRYPT_TOOLS_LOG: 'log',
-        CRYPT_TOOLS_LOG_ENABLED: 'log',
         CRYPT_TOOLS_DEBUG: 'debug',
-        CRYPT_TOOLS_DEBUG_ENABLED: 'debug',
         CRYPT_TOOLS_PASSWORD: 'password',
         CRYPT_TOOLS_PASSWORD_OUTER: 'passwordOuter',
         CRYPT_TOOLS_PASSWORD_HIDDEN: 'passwordHidden',

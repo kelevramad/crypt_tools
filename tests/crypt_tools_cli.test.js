@@ -71,8 +71,8 @@ test('loads config defaults for password and kdf', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-config-'));
   const configPath = path.join(tmp, '.crypt_tools.json');
   fs.writeFileSync(configPath, JSON.stringify({
-    default_password: 'config-pass',
-    default_kdf: 'argon2',
+    password: 'config-pass',
+    kdf: 'argon2',
     iterations: 3,
   }), 'utf8');
 

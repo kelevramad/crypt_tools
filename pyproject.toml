@@ -1,6 +1,6 @@
 [project]
 name = "crypt-tools"
-version = "2.6.0"
+version = "2.10.0"
 description = "Crypt Tools"
 readme = "README.md"
 requires-python = ">=3.13"
@@ -17,6 +17,7 @@ dependencies = [
 dev = [
     "flake8>=7.1.1",
     "isort>=5.13.2",
+    "pyright>=1.1.409",
     "pytest-cov>=6.0.0",
     "pytest>=8.3.3",
     "ruff>=0.7.3",

@@ -480,8 +480,8 @@ def test_cli_uses_config_defaults(monkeypatch, capsys, tmp_path):
 	config_path.write_text(
 		json.dumps(
 			{
-				'default_password': 'config-pass',
-				'default_kdf': 'argon2',
+				'password': 'config-pass',
+				'kdf': 'argon2',
 				'iterations': 3,
 			}
 		),
@@ -1311,15 +1311,9 @@ def test_recursive_encrypt_fail_count(monkeypatch, tmp_path):
 	monkeypatch.setattr(
 		crypt_tools.CryptoEngine,
 		'encrypt_file',
-		lambda self,
-		i,
-		o,
-		p,
-		compress=False,
-		keyfile_data=None,
-		kdf_type=None,
-		iterations=None,
-		recovery_key_path=None: False,
+		lambda self, i, o, p, compress=False, keyfile_data=None, kdf_type=None, iterations=None, recovery_key_path=None: (
+			False
+		),
 	)
 	main(['--encrypt', '-r', '-f', str(tmp_path), '-p', password])
 
@@ -1351,15 +1345,9 @@ def test_non_recursive_fail_exit(monkeypatch, tmp_path):
 	monkeypatch.setattr(
 		crypt_tools.CryptoEngine,
 		'encrypt_file',
-		lambda self,
-		i,
-		o,
-		p,
-		compress=False,
-		keyfile_data=None,
-		kdf_type=None,
-		iterations=None,
-		recovery_key_path=None: False,
+		lambda self, i, o, p, compress=False, keyfile_data=None, kdf_type=None, iterations=None, recovery_key_path=None: (
+			False
+		),
 	)
 	with pytest.raises(SystemExit):
 		main(['--encrypt', '-f', str(infile), '-p', password])

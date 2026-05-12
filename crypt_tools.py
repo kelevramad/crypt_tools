@@ -20,7 +20,7 @@ import re
 import glob
 import tempfile
 from enum import StrEnum
-from typing import Optional, List
+from typing import Optional, List, NoReturn
 
 # Third-party imports
 try:
@@ -35,6 +35,7 @@ try:
 
 	ARGON2_AVAILABLE = True
 except ImportError:
+	argon2_low = None  # type: ignore[assignment]
 	ARGON2_AVAILABLE = False
 
 try:
@@ -42,6 +43,7 @@ try:
 
 	QRCODE_AVAILABLE = True
 except ImportError:
+	qrcode = None  # type: ignore[assignment]
 	QRCODE_AVAILABLE = False
 
 try:
@@ -49,6 +51,7 @@ try:
 
 	BLESSED_AVAILABLE = True
 except ImportError:
+	Terminal = None  # type: ignore[assignment,misc]
 	BLESSED_AVAILABLE = False
 
 
@@ -168,7 +171,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.9.0'
+	VERSION = '2.10.0'
 
 	# File format
 	MAGIC = b'CT02'
@@ -230,8 +233,8 @@ class ConsoleLogger:
 	All output goes through a single 'show' method.
 	"""
 
-	DEBUG_ENABLED = False
-	LOG_ENABLED = False
+	DEBUG_ENABLED: bool = False
+	LOG_ENABLED: bool = False
 	LOG_FILE = 'crypt_tools.log'
 
 	# Output style definitions: icon + color for each level
@@ -246,7 +249,7 @@ class ConsoleLogger:
 
 	@staticmethod
 	def show(
-		level: str, message: str, icon: str = None, show_console: bool = True, log_file: bool = True
+		level: str, message: str, icon: Optional[str] = None, show_console: bool = True, log_file: bool = True
 	) -> None:
 		"""
 		Unified output method - writes to console and/or log file with emoji and colors.
@@ -318,7 +321,7 @@ class UIHelpers:
 	@staticmethod
 	def render_qr(data: str) -> str:
 		"""Render a string as a terminal-friendly QR code."""
-		if not QRCODE_AVAILABLE:
+		if not QRCODE_AVAILABLE or qrcode is None:
 			raise RuntimeError(
 				'QR code support is not available. Please install the qrcode package.'
 			)
@@ -355,7 +358,7 @@ class UIHelpers:
 	@staticmethod
 	def file_selector(start_path: str = '.') -> Optional[str]:
 		"""Open a simple terminal file selector and return the chosen path."""
-		if not BLESSED_AVAILABLE:
+		if not BLESSED_AVAILABLE or Terminal is None:
 			raise RuntimeError(
 				'Interactive file selection is not available. Please install the blessed package.'
 			)
@@ -714,37 +717,23 @@ CONFIG_FILENAMES = (
 
 CONFIG_KEY_ALIASES = {
 	'compress': 'compress',
-	'compression': 'compress',
-	'default_compression': 'compress',
 	'kdf': 'kdf',
-	'default_kdf': 'kdf',
 	'iterations': 'iterations',
-	'default_iterations': 'iterations',
 	'log': 'log',
-	'logging': 'log',
-	'log_enabled': 'log',
 	'debug': 'debug',
-	'debug_enabled': 'debug',
 	'password': 'password',
-	'default_password': 'password',
 	'password_outer': 'password_outer',
-	'default_password_outer': 'password_outer',
 	'password_hidden': 'password_hidden',
-	'default_password_hidden': 'password_hidden',
 	'keyfile': 'keyfile',
-	'default_keyfile': 'keyfile',
 	'threshold': 'threshold',
 }
 
 ENV_KEY_ALIASES = {
 	'CRYPT_TOOLS_COMPRESS': 'compress',
-	'CRYPT_TOOLS_COMPRESSION': 'compress',
 	'CRYPT_TOOLS_KDF': 'kdf',
 	'CRYPT_TOOLS_ITERATIONS': 'iterations',
 	'CRYPT_TOOLS_LOG': 'log',
-	'CRYPT_TOOLS_LOG_ENABLED': 'log',
 	'CRYPT_TOOLS_DEBUG': 'debug',
-	'CRYPT_TOOLS_DEBUG_ENABLED': 'debug',
 	'CRYPT_TOOLS_PASSWORD': 'password',
 	'CRYPT_TOOLS_PASSWORD_OUTER': 'password_outer',
 	'CRYPT_TOOLS_PASSWORD_HIDDEN': 'password_hidden',
@@ -1236,7 +1225,7 @@ class CryptoEngine:
 	) -> bytes:
 		"""Derive a 256-bit key from password (and optional keyfile) and salt using PBKDF2 or Argon2."""
 		if kdf_type == Config.KDF_ARGON2:
-			if not ARGON2_AVAILABLE:
+			if not ARGON2_AVAILABLE or argon2_low is None:
 				ConsoleLogger.show(
 					'error',
 					'Argon2 is not available. Please install argon2-cffi: pip install argon2-cffi',
@@ -1279,11 +1268,12 @@ class CryptoEngine:
 
 	def _format_size(self, size: int) -> str:
 		"""Human readable file size."""
+		value: float = size
 		for unit in ['B', 'KB', 'MB', 'GB', 'TB']:
-			if size < 1024:
-				return f'{size:.2f}{unit}'
-			size /= 1024
-		return f'{size:.2f}PB'
+			if value < 1024:
+				return f'{value:.2f}{unit}'
+			value /= 1024
+		return f'{value:.2f}PB'
 
 	def encrypt_data(
 		self,
@@ -1749,7 +1739,7 @@ class CryptoEngine:
 			if os.path.exists(output_path):
 				try:
 					os.remove(output_path)
-				except:
+				except OSError:
 					pass
 			return False
 
@@ -2163,7 +2153,7 @@ class CryptoEngine:
 			if os.path.exists(output_path):
 				try:
 					os.remove(output_path)
-				except:
+				except OSError:
 					pass
 			return False
 
@@ -2672,18 +2662,14 @@ def parse_args(argv=None):
 			'  - Secure deletion (--shred): securely delete files by overwriting with random data before removal.\n'
 			'    Uses DoD 5220.22-M standard (3 passes by default).\n\n'
 			f'{UIHelpers.heading("🌍", "Environment Variables")}\n'
-			'  CRYPT_TOOLS_PASSWORD, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,\n'
-			'  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_COMPRESSION, CRYPT_TOOLS_LOG,\n'
-			'  CRYPT_TOOLS_LOG_ENABLED, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_DEBUG_ENABLED,\n'
-			'  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD,\n'
-			'  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN\n\n'
+			'  CRYPT_TOOLS_COMPRESS, CRYPT_TOOLS_KDF, CRYPT_TOOLS_ITERATIONS,\n'
+			'  CRYPT_TOOLS_LOG, CRYPT_TOOLS_DEBUG, CRYPT_TOOLS_PASSWORD,\n'
+			'  CRYPT_TOOLS_PASSWORD_OUTER, CRYPT_TOOLS_PASSWORD_HIDDEN,\n'
+			'  CRYPT_TOOLS_KEYFILE, CRYPT_TOOLS_THRESHOLD\n\n'
 			f'{UIHelpers.heading("⚙️", "Config Keys")}\n'
-			'  compress, compression, default_compression, kdf, default_kdf,\n'
-			'  iterations, default_iterations, log, logging, log_enabled,\n'
-			'  debug, debug_enabled, password, default_password,\n'
-			'  password_outer, default_password_outer,\n'
-			'  password_hidden, default_password_hidden,\n'
-			'  keyfile, default_keyfile, threshold'
+			'  compress, kdf, iterations, log, debug,\n'
+			'  password, password_outer, password_hidden,\n'
+			'  keyfile, threshold'
 		),
 		formatter_class=argparse.RawTextHelpFormatter,
 		add_help=False,
@@ -2983,7 +2969,7 @@ def main(argv=None):
 		if ConsoleLogger.LOG_ENABLED:
 			ConsoleLogger.show('info', '=' * 80, show_console=False, log_file=True)
 
-	def abort(code: int = 1):
+	def abort(code: int = 1) -> NoReturn:
 		finish_session()
 		raise SystemExit(code)
 
@@ -3038,6 +3024,7 @@ def main(argv=None):
 				'--hidden-vol requires a single decoy file (no wildcards or multi-file batch)',
 			)
 			abort(1)
+		assert file_list is not None
 		decoy_p = file_list[0]
 		if not os.path.isfile(decoy_p):
 			ConsoleLogger.show('error', 'Decoy path must be a regular file for --hidden-vol')
@@ -3047,7 +3034,7 @@ def main(argv=None):
 			abort(1)
 
 	if args.inspect:
-		target_file = (file_list and file_list[0]) if file_list else args.file
+		target_file = file_list[0] if file_list else args.file
 
 		if not target_file:
 			ConsoleLogger.show('error', 'No file specified for inspection')
@@ -3453,10 +3440,6 @@ def main(argv=None):
 			input_dir = args.file
 			mode_str = 'decrypt' if args.decrypt else 'encrypt'
 			compression_str = 'enabled' if args.compress else 'disabled'
-			lock_emoji = '🔓' if args.decrypt else '🔐'
-			green = TerminalColors.Foreground.GREEN
-			yellow = TerminalColors.Foreground.YELLOW
-			blue = TerminalColors.Foreground.BLUE
 
 			ConsoleLogger.show('debug', 'Recursive mode enabled')
 
@@ -3600,10 +3583,11 @@ def main(argv=None):
 							iterations,
 						)
 					elif args.threshold:
+						passwords_list: List[str] = list(args.password) if isinstance(args.password, list) else [args.password]
 						ok = engine.encrypt_with_threshold(
 							target,
 							output_file,
-							args.password,
+							passwords_list,
 							args.threshold,
 							args.compress,
 							keyfile_data,
@@ -3629,7 +3613,7 @@ def main(argv=None):
 						ok = engine.decrypt_hidden_container(
 							target,
 							output_file,
-							args.password,
+							PasswordUtils.normalize(args.password),
 							hidden=args.hidden,
 							compress=args.compress,
 							keyfile_data=keyfile_data,
@@ -3656,10 +3640,11 @@ def main(argv=None):
 							ConsoleLogger.show(
 								'debug', f'Decrypting with threshold, passwords: {args.password}'
 							)
+							passwords_list_d: List[str] = list(args.password) if isinstance(args.password, list) else [args.password]
 							ok = engine.decrypt_with_threshold(
 								target,
 								output_file,
-								args.password,
+								passwords_list_d,
 								args.compress,
 								keyfile_data,
 							)

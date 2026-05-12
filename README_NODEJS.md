@@ -364,7 +364,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 
 ## Technical Details
 
-### Version 2.9.0 Specifications
+### Version 2.10.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -481,6 +481,10 @@ ncc build crypt_tools.js -o dist
 
 ## Version History
 
+### 2.10.0
+- Config-key cleanup: removed deprecated aliases (`compression`, `default_*`, `log_enabled`, `debug_enabled`, `logging`) and corresponding env-vars (`CRYPT_TOOLS_COMPRESSION`, `CRYPT_TOOLS_LOG_ENABLED`, `CRYPT_TOOLS_DEBUG_ENABLED`); use the canonical keys instead (`compress`, `kdf`, `iterations`, `log`, `debug`, `password`, `password_outer`, `password_hidden`, `keyfile`, `threshold`).
+- Help text and `--help` output updated to list only the supported config keys and environment variables.
+
 ### 2.9.0
 - Added secure file deletion (`--shred`) implementing DoD 5220.22-M standard (3 passes by default), configurable via `--passes`.
 - Progress bars for each overwrite pass, session timestamps, file info (name + size), and total time display.
@@ -499,4 +503,4 @@ ncc build crypt_tools.js -o dist
 ---
 
 **Author**: Center For Cyber Intelligence
-**Version**: 2.9.0
+**Version**: 2.10.0
