@@ -5,7 +5,7 @@
 | Attribute | Details |
 |-----------|---------|
 | **Product Name** | Crypt Tools |
-| **Version** | 2.10.1 |
+| **Version** | 2.11.0 |
 | **Type** | Command-Line Encryption Utility |
 | **Platform** | Cross-platform (Windows, Linux, macOS) |
 | **Language** | Python 3.13+ (reference) + Node.js 18+ edition |
@@ -356,6 +356,7 @@ uv run pytest --cov=crypt_tools --cov-report=html
 
 | Version | Date | Changes |
 |---------|------|---------|
+| 2.11.0 | 2026-05-18 | Extended `--threshold` (Shamir's Secret Sharing) to `-t/--text` payloads in both Python and Node editions: added in-memory `encrypt_data_with_threshold` / `decrypt_data_with_threshold` (and JS equivalents), auto-detection of threshold-encrypted text on decrypt, base64 wire-format compatibility across editions, and dedicated engine + CLI tests |
 | 2.10.1 | 2026-05-12 | Fixed Node.js hidden-container decrypt by passing byte-range offsets to the correct `decryptFile` parameters; added dedicated Python and Node smoke tests plus `smoke` commands for fast CLI roundtrip verification |
 | 2.10.0 | 2026-05-11 | Config-key cleanup: removed deprecated aliases (`compression`, `default_*`, `log_enabled`, `debug_enabled`, `logging`) and corresponding env-vars; only canonical keys remain. Full pyright type-checker pass on `crypt_tools.py`, removed dead locals, replaced bare `except:` with `except OSError:`; added `pyright` to dev dependencies |
 | 2.9.0 | 2026-04-12 | Added secure file deletion (`--shred`) implementing DoD 5220.22-M standard (3 passes by default), `--passes` parameter for custom pass count, progress bars for each overwrite pass, session timestamps and file info display |

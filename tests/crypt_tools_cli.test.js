@@ -148,6 +148,29 @@ test('allows multiple passwords without threshold in decrypt mode', () => {
   assert.doesNotMatch(res.stdout + res.stderr, /Multiple -p\/--password values require --threshold/);
 });
 
+test('threshold text encrypt/decrypt roundtrip with 2 of 3 passwords', () => {
+  const enc = runCLI(['-t', 'text threshold roundtrip', '-p', 'alpha', '-p', 'beta', '-p', 'gamma', '--threshold', '2']);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+  const m = enc.stdout.match(/Encrypted \(Base64\):\s*([A-Za-z0-9+/=]+)/);
+  assert.ok(m, 'expected base64 output');
+  const b64 = m[1];
+
+  const dec = runCLI(['-d', '-t', b64, '-p', 'alpha', '-p', 'gamma']);
+  assert.equal(dec.code, 0, dec.stdout + dec.stderr);
+  assert.match(dec.stdout, /Threshold encrypted text: 3 passwords, 2 required to decrypt/);
+  assert.match(dec.stdout, /Decrypted:\s*text threshold roundtrip/);
+});
+
+test('threshold text decrypt fails when fewer than threshold passwords are valid', () => {
+  const enc = runCLI(['-t', 'text threshold fail', '-p', 'alpha', '-p', 'beta', '-p', 'gamma', '--threshold', '2']);
+  assert.equal(enc.code, 0, enc.stdout + enc.stderr);
+  const b64 = enc.stdout.match(/Encrypted \(Base64\):\s*([A-Za-z0-9+/=]+)/)[1];
+
+  const dec = runCLI(['-d', '-t', b64, '-p', 'alpha', '-p', 'WRONG', '-p', 'ALSOWRONG']);
+  assert.equal(dec.code, 1);
+  assert.match(dec.stdout + dec.stderr, /Not enough valid passwords provided\. Need 2, got 1/);
+});
+
 test('threshold decrypt accepts repeated password when distinct shares use the same secret', () => {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'crypt-tools-threshold-dup-'));
   const infile = path.join(tmp, 'README.md');

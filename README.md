@@ -381,7 +381,7 @@ uv run crypt_tools.py --decrypt --hidden -f decoy.txt.enc -p "hidden_pw" -o out_
 
 ## Technical Details
 
-### Version 2.10.1 Specifications
+### Version 2.11.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -525,6 +525,13 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 
 ## Version History
 
+### 2.11.0
+- Extended `--threshold` (Shamir's Secret Sharing) to text payloads (`-t/--text`); previously file-only.
+- Added in-memory `encrypt_data_with_threshold` / `decrypt_data_with_threshold` on `CryptEngine`.
+- Threshold-encrypted text is auto-detected on decrypt via the `CT02` header's `FLAG_THRESHOLD` bit — no extra flags needed.
+- Wire format is identical across the Python and Node editions, so threshold-encrypted text blobs are interoperable between the two CLIs.
+- New tests: engine-level roundtrip, insufficient-passwords failure, and CLI roundtrip / failure cases.
+
 ### 2.10.1
 - Fixed Node.js hidden-container decryption so the outer and inner `CT02` blobs are decrypted using the correct byte ranges.
 - Added a focused Python smoke test for CLI text encryption/decryption roundtrip.
@@ -554,4 +561,4 @@ pyinstaller --onefile --icon=favicon.ico --version-file=version_info.txt crypt_t
 ---
 
 **Author**: Center For Cyber Intelligence  
-**Version**: 2.10.1
+**Version**: 2.11.0

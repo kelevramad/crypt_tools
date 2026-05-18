@@ -419,6 +419,57 @@ def test_cli_decrypt_allows_multiple_passwords_without_threshold(capsys):
 	assert 'Multiple -p/--password values require --threshold' not in captured.out
 
 
+def test_threshold_text_roundtrip(engine):
+	"""In-memory threshold encryption: 2-of-3 passwords recovers plaintext."""
+	passwords = ['alpha', 'beta', 'gamma']
+	plaintext = b'threshold text payload'
+
+	blob = engine.encrypt_data_with_threshold(plaintext, passwords, 2)
+	assert isinstance(blob, (bytes, bytearray))
+	assert blob[:4] == Config.MAGIC
+	assert blob[5] & Config.FLAG_THRESHOLD
+	assert blob[5] & Config.FLAG_TEXT
+
+	# Any 2 of the 3 passwords must decrypt
+	assert engine.decrypt_data_with_threshold(bytes(blob), ['alpha', 'gamma']) == plaintext
+	assert engine.decrypt_data_with_threshold(bytes(blob), ['beta', 'alpha']) == plaintext
+
+
+def test_threshold_text_insufficient_passwords_fails(engine):
+	"""Fewer than threshold valid passwords must return None."""
+	passwords = ['one', 'two', 'three']
+	blob = engine.encrypt_data_with_threshold(b'secret-text', passwords, 2)
+	# Only one correct + two bogus
+	assert engine.decrypt_data_with_threshold(bytes(blob), ['one', 'WRONG', 'NOPE']) is None
+
+
+def test_cli_threshold_text_roundtrip(capsys):
+	"""CLI: encrypt text with --threshold, then decrypt with 2 of 3 passwords."""
+	main(['--encrypt', '-t', 'cli threshold text', '-p', 'a', '-p', 'b', '-p', 'c', '--threshold', '2'])
+	captured = capsys.readouterr()
+	match = re.search(r'Encrypted \(Base64\): ([A-Za-z0-9+/=]+)', captured.out)
+	assert match, captured.out
+	b64 = match.group(1)
+
+	main(['--decrypt', '-t', b64, '-p', 'a', '-p', 'c'])
+	captured = capsys.readouterr()
+	assert 'Threshold encrypted text: 3 passwords, 2 required to decrypt' in captured.out
+	assert 'Decrypted: cli threshold text' in captured.out
+
+
+def test_cli_threshold_text_insufficient_passwords(capsys):
+	"""CLI: only one valid password against threshold-2 text should fail."""
+	main(['--encrypt', '-t', 'cli threshold fail', '-p', 'a', '-p', 'b', '-p', 'c', '--threshold', '2'])
+	captured = capsys.readouterr()
+	match = re.search(r'Encrypted \(Base64\): ([A-Za-z0-9+/=]+)', captured.out)
+	assert match, captured.out
+	b64 = match.group(1)
+
+	main(['--decrypt', '-t', b64, '-p', 'a', '-p', 'WRONG', '-p', 'ALSOWRONG'])
+	captured = capsys.readouterr()
+	assert 'Not enough valid passwords provided. Need 2, got 1' in captured.out
+
+
 def test_cli_decrypt_threshold_file_prompts_required_password_count(monkeypatch, capsys, engine):
 	"""Threshold decrypt should prompt for the file's required password count."""
 	passwords = ['alpha', 'beta', 'gamma']
