@@ -171,7 +171,7 @@ class Config:
 
 	AUTHOR = 'Center For Cyber Intelligence'
 	DESCRIPTION = 'Crypt Tools (AES-GCM Edition)'
-	VERSION = '2.10.1'
+	VERSION = '2.11.0'
 
 	# File format
 	MAGIC = b'CT02'
@@ -2157,6 +2157,143 @@ class CryptoEngine:
 					pass
 			return False
 
+	def encrypt_data_with_threshold(
+		self,
+		data: bytes,
+		passwords: List[str],
+		threshold: int,
+		keyfile_data: Optional[bytes] = None,
+		kdf_type: int = Config.KDF_PBKDF2,
+		iterations: int = Config.PBKDF2_ITERATIONS,
+	) -> bytes:
+		"""Encrypt bytes in memory using threshold (Shamir's Secret Sharing) encryption.
+
+		Layout: [HEADER w/ FLAG_THRESHOLD|FLAG_TEXT] + [SALT] + [NONCE]
+		        + [num_passwords, threshold] + [N × (password_salt + encrypted_share)]
+		        + [CIPHERTEXT] + [TAG]
+		"""
+		num_passwords = len(passwords)
+		if threshold > num_passwords:
+			raise ValueError('Threshold cannot exceed number of passwords')
+		if threshold < 2:
+			raise ValueError('Threshold must be at least 2')
+
+		ConsoleLogger.show(
+			'debug',
+			f'Starting in-memory threshold encryption: {num_passwords} passwords, threshold {threshold}',
+		)
+
+		master_key = os.urandom(Config.KEY_SIZE)
+		shares = ShamirSecretSharing.generate_shares(master_key, num_passwords, threshold)
+
+		salt = os.urandom(Config.SALT_SIZE)
+		nonce = os.urandom(Config.NONCE_SIZE)
+		key = self._derive_key('threshold-dummy', salt, None, kdf_type, iterations)
+
+		header = HeaderParser.build_header(
+			is_text=True,
+			use_keyfile=keyfile_data is not None,
+			kdf_id=kdf_type,
+			iterations=iterations,
+		)
+		header_bytes = bytearray(header)
+		header_bytes[5] |= Config.FLAG_THRESHOLD
+		header = bytes(header_bytes)
+
+		shares_blob = bytearray()
+		for i in range(num_passwords):
+			password_salt = os.urandom(Config.SALT_SIZE)
+			password_key = self._derive_key(
+				passwords[i], password_salt, keyfile_data, kdf_type, iterations
+			)
+			encrypted_share = self._encrypt_share_with_password(shares[i], password_key)
+			shares_blob += password_salt + encrypted_share
+
+		cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+		ciphertext, tag = cipher.encrypt_and_digest(data)
+
+		ConsoleLogger.show(
+			'success',
+			f'Threshold text encryption complete ({num_passwords} passwords, {threshold} required)',
+		)
+		return (
+			header
+			+ salt
+			+ nonce
+			+ bytes([num_passwords, threshold])
+			+ bytes(shares_blob)
+			+ ciphertext
+			+ tag
+		)
+
+	def decrypt_data_with_threshold(
+		self,
+		enc_data: bytes,
+		passwords: List[str],
+		keyfile_data: Optional[bytes] = None,
+	) -> Optional[bytes]:
+		"""Decrypt threshold-encrypted bytes produced by encrypt_data_with_threshold."""
+		try:
+			metadata = HeaderParser.parse_format(enc_data, text_payload=True)
+			if metadata['is_legacy'] or not (metadata['flags'] & Config.FLAG_THRESHOLD):
+				raise ValueError('Data is not encrypted with threshold mode')
+
+			pos = metadata['header_len']
+			salt = enc_data[pos : pos + metadata['salt_len']]
+			pos += metadata['salt_len']
+			nonce = enc_data[pos : pos + metadata['nonce_len']]
+			pos += metadata['nonce_len']
+
+			num_passwords = enc_data[pos]
+			threshold = enc_data[pos + 1]
+			pos += 2
+
+			ConsoleLogger.show(
+				'info',
+				f'Threshold encrypted text: {num_passwords} passwords, {threshold} required to decrypt',
+			)
+
+			encrypted_share_len = Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE
+			encrypted_shares = []
+			for _ in range(num_passwords):
+				password_salt = enc_data[pos : pos + Config.SALT_SIZE]
+				pos += Config.SALT_SIZE
+				encrypted_share = enc_data[pos : pos + encrypted_share_len]
+				pos += encrypted_share_len
+				encrypted_shares.append({'salt': password_salt, 'data': encrypted_share})
+
+			master_key = self._try_reconstruct_master_key(
+				'',
+				'',
+				encrypted_shares,
+				passwords,
+				threshold,
+				keyfile_data,
+				metadata,
+			)
+			if master_key is None:
+				return None
+
+			key = self._derive_key(
+				'threshold-dummy',
+				salt,
+				None,
+				metadata.get('kdf_id', Config.KDF_PBKDF2),
+				metadata.get('iterations', Config.PBKDF2_ITERATIONS),
+			)
+
+			ciphertext = enc_data[pos : -metadata['tag_len']]
+			tag = enc_data[-metadata['tag_len'] :]
+
+			cipher = AES.new(key, AES.MODE_GCM, nonce=nonce)
+			decrypted = cipher.decrypt_and_verify(ciphertext, tag)
+			ConsoleLogger.show('success', 'Threshold text decryption successful')
+			return decrypted
+
+		except Exception as e:
+			ConsoleLogger.show('error', f'Threshold text decryption error: {e}')
+			return None
+
 	def _try_reconstruct_master_key(
 		self,
 		input_path: str,
@@ -2941,9 +3078,6 @@ def main(argv=None):
 				'warning',
 				f'--threshold is {args.threshold} but only {len(args.password)} passwords provided via -p',
 			)
-		if args.text:
-			ConsoleLogger.show('error', '--threshold applies only to file encryption/decryption')
-			sys.exit(1)
 		if args.hidden_vol:
 			ConsoleLogger.show('error', '--threshold cannot be used with --hidden-vol')
 			sys.exit(1)
@@ -3319,6 +3453,23 @@ def main(argv=None):
 		except Exception as e:
 			ConsoleLogger.show('debug', f'Could not inspect threshold requirements: {e}')
 
+	if args.decrypt and args.text and not args.hidden_vol:
+		try:
+			_raw_peek = base64.b64decode(args.text)
+			_meta_peek = HeaderParser.parse_format(_raw_peek, text_payload=True)
+			if not _meta_peek['is_legacy'] and (_meta_peek['flags'] & Config.FLAG_THRESHOLD):
+				_pos = (
+					_meta_peek['header_len']
+					+ _meta_peek['salt_len']
+					+ _meta_peek['nonce_len']
+				)
+				threshold_requirements = {
+					'num_passwords': _raw_peek[_pos],
+					'threshold': _raw_peek[_pos + 1],
+				}
+		except Exception as e:
+			ConsoleLogger.show('debug', f'Could not inspect text threshold requirements: {e}')
+
 	# Secure Password Input with Strength Indicator
 	# Only prompt for password if not provided (None), not if empty string was explicitly passed
 	if args.hidden_vol:
@@ -3396,14 +3547,31 @@ def main(argv=None):
 		# Default to encrypt if decrypt is not explicitly set
 		if not args.decrypt:
 			ConsoleLogger.show('info', 'Encrypting text...')
-			result = engine.encrypt_data(
-				args.text.encode('utf-8'),
-				args.password,
-				keyfile_data,
-				kdf_type,
-				iterations,
-				recovery_key_path=recovery_key_path,
-			)
+			if args.threshold:
+				if args.recovery_key:
+					ConsoleLogger.show(
+						'warning', '--recovery-key is ignored with --threshold for text encryption'
+					)
+				pw_list = (
+					args.password if isinstance(args.password, list) else [args.password]
+				)
+				result = engine.encrypt_data_with_threshold(
+					args.text.encode('utf-8'),
+					pw_list,
+					args.threshold,
+					keyfile_data,
+					kdf_type,
+					iterations,
+				)
+			else:
+				result = engine.encrypt_data(
+					args.text.encode('utf-8'),
+					args.password,
+					keyfile_data,
+					kdf_type,
+					iterations,
+					recovery_key_path=recovery_key_path,
+				)
 			b64_result = base64.b64encode(result).decode('utf-8')
 			ConsoleLogger.show('success', f'Encrypted (Base64): {b64_result}')
 			if args.qr:
@@ -3419,7 +3587,22 @@ def main(argv=None):
 			ConsoleLogger.show('info', 'Decrypting text...')
 			ConsoleLogger.show('debug', 'Decoding Base64 text input')
 			raw_data = base64.b64decode(args.text)
-			result = engine.decrypt_data(raw_data, args.password, keyfile_data, recovery_key_data)
+			is_threshold_text = False
+			try:
+				_meta_check = HeaderParser.parse_format(raw_data, text_payload=True)
+				is_threshold_text = (
+					not _meta_check['is_legacy']
+					and bool(_meta_check['flags'] & Config.FLAG_THRESHOLD)
+				)
+			except Exception:
+				pass
+			if is_threshold_text or args.threshold:
+				pw_list = (
+					args.password if isinstance(args.password, list) else [args.password]
+				)
+				result = engine.decrypt_data_with_threshold(raw_data, pw_list, keyfile_data)
+			else:
+				result = engine.decrypt_data(raw_data, args.password, keyfile_data, recovery_key_data)
 			if result:
 				ConsoleLogger.show(
 					'success', f'Decrypted: {result.decode("utf-8")}', log_file=False

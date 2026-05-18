@@ -158,7 +158,7 @@ class ShamirSecretSharing {
 class Config {
     static AUTHOR = 'Center For Cyber Intelligence';
     static DESCRIPTION = 'Crypt Tools (AES-GCM Edition)';
-    static VERSION = '2.10.1';
+    static VERSION = '2.11.0';
 
     // File format
     static MAGIC = Buffer.from('CT02');
@@ -2083,6 +2083,101 @@ class CryptoEngine {
         }
     }
 
+    async encryptDataWithThreshold(data, passwords, threshold, keyfileData = null, kdfType = Config.KDF_PBKDF2, iterations = Config.PBKDF2_ITERATIONS) {
+        const numPasswords = passwords.length;
+        if (threshold > numPasswords) {
+            throw new Error('Threshold cannot exceed number of passwords');
+        }
+        if (threshold < 2) {
+            throw new Error('Threshold must be at least 2');
+        }
+
+        ConsoleLogger.show('debug', `Starting in-memory threshold encryption: ${numPasswords} passwords, threshold ${threshold}`);
+
+        const masterKey = crypto.randomBytes(Config.KEY_SIZE);
+        const shares = ShamirSecretSharing.generateShares(masterKey, numPasswords, threshold);
+
+        const salt = crypto.randomBytes(Config.SALT_SIZE);
+        const nonce = crypto.randomBytes(Config.NONCE_SIZE);
+        const key = await this._deriveKey('threshold-dummy', salt, null, kdfType, iterations);
+
+        const header = HeaderParser.buildHeader({ isText: true, useKeyfile: keyfileData !== null, kdfId: kdfType, iterations });
+        header[5] |= Config.FLAG_THRESHOLD;
+
+        const shareChunks = [];
+        for (let i = 0; i < numPasswords; i++) {
+            const passwordSalt = crypto.randomBytes(Config.SALT_SIZE);
+            const passwordKey = await this._deriveKey(passwords[i], passwordSalt, keyfileData, kdfType, iterations);
+            const encryptedShare = this._encryptShareWithPassword(shares[i], passwordKey);
+            shareChunks.push(passwordSalt, encryptedShare);
+        }
+
+        const cipher = crypto.createCipheriv('aes-256-gcm', key, nonce);
+        const ciphertext = Buffer.concat([cipher.update(data), cipher.final()]);
+        const tag = cipher.getAuthTag();
+
+        ConsoleLogger.show('success', `Threshold text encryption complete (${numPasswords} passwords, ${threshold} required)`);
+        return Buffer.concat([
+            header,
+            salt,
+            nonce,
+            Buffer.from([numPasswords, threshold]),
+            ...shareChunks,
+            ciphertext,
+            tag
+        ]);
+    }
+
+    async decryptDataWithThreshold(encData, passwords, keyfileData = null) {
+        try {
+            const metadata = HeaderParser.parseFormat(encData, { textPayload: true });
+            if (metadata.isLegacy || !(metadata.flags & Config.FLAG_THRESHOLD)) {
+                throw new Error('Data is not encrypted with threshold mode');
+            }
+
+            let pos = metadata.headerLen;
+            const salt = encData.subarray(pos, pos + metadata.saltLen);
+            pos += metadata.saltLen;
+            const nonce = encData.subarray(pos, pos + metadata.nonceLen);
+            pos += metadata.nonceLen;
+
+            const numPasswords = encData[pos];
+            const threshold = encData[pos + 1];
+            pos += 2;
+
+            ConsoleLogger.show('info', `Threshold encrypted text: ${numPasswords} passwords, ${threshold} required to decrypt`);
+
+            const encryptedShareLen = Config.NONCE_SIZE + Config.KEY_SIZE + 1 + Config.TAG_SIZE;
+            const encryptedShares = [];
+            for (let i = 0; i < numPasswords; i++) {
+                const passwordSalt = encData.subarray(pos, pos + Config.SALT_SIZE);
+                pos += Config.SALT_SIZE;
+                const encryptedShare = encData.subarray(pos, pos + encryptedShareLen);
+                pos += encryptedShareLen;
+                encryptedShares.push({ salt: passwordSalt, data: encryptedShare });
+            }
+
+            const masterKey = await this._tryReconstructMasterKey('', '', encryptedShares, passwords, threshold, keyfileData, metadata);
+            if (!masterKey) {
+                return null;
+            }
+
+            const key = await this._deriveKey('threshold-dummy', salt, null, metadata.kdfId || Config.KDF_PBKDF2, metadata.iterations || Config.PBKDF2_ITERATIONS);
+
+            const ciphertext = encData.subarray(pos, encData.length - metadata.tagLen);
+            const tag = encData.subarray(encData.length - metadata.tagLen);
+
+            const decipher = crypto.createDecipheriv('aes-256-gcm', key, nonce);
+            decipher.setAuthTag(tag);
+            const decrypted = Buffer.concat([decipher.update(ciphertext), decipher.final()]);
+            ConsoleLogger.show('success', 'Threshold text decryption successful');
+            return decrypted;
+        } catch (err) {
+            ConsoleLogger.show('error', `Threshold text decryption error: ${err.message}`);
+            return null;
+        }
+    }
+
     async _tryReconstructMasterKey(inputPath, outputPath, encryptedShares, passwords, threshold, keyfileData, metadata) {
         const kdfType = metadata.kdfId || Config.KDF_PBKDF2;
         const iterations = metadata.iterations || Config.PBKDF2_ITERATIONS;
@@ -2653,10 +2748,6 @@ async function main() {
             if (options.threshold > (options.password ? options.password.length : 0)) {
                 ConsoleLogger.show('warning', `--threshold is ${options.threshold} but only ${options.password ? options.password.length : 0} passwords provided via -p`);
             }
-            if (options.text) {
-                ConsoleLogger.show('error', '--threshold applies only to file encryption/decryption');
-                process.exit(1);
-            }
             if (options.hiddenVol) {
                 ConsoleLogger.show('error', '--threshold cannot be used with --hidden-vol');
                 process.exit(1);
@@ -2953,6 +3044,22 @@ async function main() {
         }
     }
 
+    if (options.decrypt && options.text && !options.hiddenVol) {
+        try {
+            const rawPeek = Buffer.from(options.text, 'base64');
+            const metaPeek = HeaderParser.parseFormat(rawPeek, { textPayload: true });
+            if (!metaPeek.isLegacy && (metaPeek.flags & Config.FLAG_THRESHOLD)) {
+                const p = metaPeek.headerLen + metaPeek.saltLen + metaPeek.nonceLen;
+                thresholdRequirements = {
+                    numPasswords: rawPeek[p],
+                    threshold: rawPeek[p + 1]
+                };
+            }
+        } catch (err) {
+            ConsoleLogger.show('debug', `Could not inspect text threshold requirements: ${err.message}`);
+        }
+    }
+
     // Secure Password Input with Strength Indicator
     if (!options.inspect && options.hiddenVol) {
         if (pwOuter === undefined) {
@@ -3014,7 +3121,22 @@ async function main() {
         // Default to encrypt if decrypt is not explicitly set
         if (!options.decrypt) {
             ConsoleLogger.show('info', 'Encrypting text...');
-            const result = await engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData, kdfType, iterations, recoveryKeyPath);
+            let result;
+            if (options.threshold) {
+                if (options.recoveryKey) {
+                    ConsoleLogger.show('warning', '--recovery-key is ignored with --threshold for text encryption');
+                }
+                result = await engine.encryptDataWithThreshold(
+                    Buffer.from(options.text, 'utf-8'),
+                    options.password,
+                    options.threshold,
+                    keyfileData,
+                    kdfType,
+                    iterations
+                );
+            } else {
+                result = await engine.encryptData(Buffer.from(options.text, 'utf-8'), options.password, keyfileData, kdfType, iterations, recoveryKeyPath);
+            }
             const b64Result = result.toString('base64');
             ConsoleLogger.show('success', `Encrypted (Base64): ${b64Result}`);
             if (options.qr) {
@@ -3029,7 +3151,18 @@ async function main() {
             ConsoleLogger.show('info', 'Decrypting text...');
             ConsoleLogger.show('debug', 'Decoding Base64 text input');
             const rawData = Buffer.from(options.text, 'base64');
-            const result = await engine.decryptData(rawData, options.password, keyfileData, recoveryKeyData);
+            let isThresholdText = false;
+            try {
+                const metaCheck = HeaderParser.parseFormat(rawData, { textPayload: true });
+                isThresholdText = !metaCheck.isLegacy && Boolean(metaCheck.flags & Config.FLAG_THRESHOLD);
+            } catch (e) { /* fall through */ }
+            let result;
+            if (isThresholdText || options.threshold) {
+                const pwList = Array.isArray(options.password) ? options.password : [options.password];
+                result = await engine.decryptDataWithThreshold(rawData, pwList, keyfileData);
+            } else {
+                result = await engine.decryptData(rawData, options.password, keyfileData, recoveryKeyData);
+            }
             if (result) {
                 ConsoleLogger.show('success', `Decrypted: ${result.toString('utf-8')}`);
                 const elapsed = (Date.now() - startTime) / 1000;

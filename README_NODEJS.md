@@ -364,7 +364,7 @@ node crypt_tools.js --inspect -f decoy.txt.enc
 
 ## Technical Details
 
-### Version 2.10.1 Specifications
+### Version 2.11.0 Specifications
 This tool improves upon older implementations by:
 1.  **Key Size**: Utilizing a **32-byte (256-bit)** key derived from the password.
 2.  **Salt**: Prepending a **16-byte random salt** to the encrypted data.
@@ -486,6 +486,13 @@ ncc build crypt_tools.js -o dist
 
 ## Version History
 
+### 2.11.0
+- Extended `--threshold` (Shamir's Secret Sharing) to text payloads (`-t/--text`); previously file-only.
+- Added in-memory `encryptDataWithThreshold` / `decryptDataWithThreshold` on `CryptEngine`.
+- Threshold-encrypted text is auto-detected on decrypt via the `CT02` header's `FLAG_THRESHOLD` bit — no extra flags needed.
+- Wire format matches the Python edition byte-for-byte, so threshold-encrypted text blobs are interoperable across both CLIs.
+- New CLI tests: text-threshold roundtrip and insufficient-passwords failure case.
+
 ### 2.10.1
 - Fixed hidden-container decryption so outer and inner payloads use the correct `decryptFile` byte-range arguments.
 - Added a dedicated Node.js smoke test for CLI text encryption/decryption roundtrip.
@@ -513,4 +520,4 @@ ncc build crypt_tools.js -o dist
 ---
 
 **Author**: Center For Cyber Intelligence
-**Version**: 2.10.1
+**Version**: 2.11.0
